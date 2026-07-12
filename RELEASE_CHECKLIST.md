@@ -27,18 +27,18 @@ release tag until the repository CI workflow is green.
 ## Homebrew release prerequisite
 
 - [x] Create the public repository `rcmcsweeney/homebrew-tap` with a `main` branch.
-- [ ] Create a fine-grained token scoped only to `rcmcsweeney/homebrew-tap` with
+- [x] Create a fine-grained token scoped only to `rcmcsweeney/homebrew-tap` with
       **Contents: read and write** permission.
-- [ ] Add that token to `rcmcsweeney/cxre` as the Actions secret
+- [x] Add that token to `rcmcsweeney/cxre` as the Actions secret
       `HOMEBREW_TAP_GITHUB_TOKEN`.
-- [ ] Never put the token in a file, commit, issue, workflow log, or terminal screenshot.
+- [x] Never put the token in a file, commit, issue, workflow log, or terminal screenshot.
 
 ## Release `v0.1.0`
 
-- [ ] Confirm `CHANGELOG.md` and README examples are ready.
-- [ ] Replace `docs/cxre-terminal.png` with a fresh real screenshot showing the
+- [x] Confirm `CHANGELOG.md` and README examples are ready.
+- [x] Replace `docs/cxre-terminal.png` with a fresh real screenshot showing the
       `CXRE — Codex Resets` header and usage-limit summary.
-- [ ] Run `make ci` locally.
+- [x] Run `make ci` locally.
 - [ ] Create and push the annotated tag: `git tag -a v0.1.0 -m "CXRE v0.1.0"`.
 - [ ] Confirm the release workflow publishes five archives, checksums, five SBOMs,
       provenance, and release notes.

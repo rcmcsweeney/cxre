@@ -15,10 +15,10 @@ executable and sorts the credits that expire first.
 CXRE is an **unofficial community tool**. It is not affiliated with, endorsed
 by, or maintained by OpenAI.
 
-![CXRE reset-credit table showing four expirations](docs/cxre-terminal.png)
+![CXRE showing usage limits and three reset-credit expirations](docs/cxre-terminal.png)
 
-The screenshot shows the reset-credit table. The complete fictional example
-below also shows the usage-limit summary.
+The screenshot shows real terminal output. Text examples below use fictional
+data.
 
 ## Requirements
 
