@@ -39,13 +39,13 @@ release tag until the repository CI workflow is green.
 - [x] Replace `docs/cxre-terminal.png` with a fresh real screenshot showing the
       `CXRE — Codex Resets` header and usage-limit summary.
 - [x] Run `make ci` locally.
-- [ ] Create and push the annotated tag: `git tag -a v0.1.0 -m "CXRE v0.1.0"`.
-- [ ] Confirm the release workflow publishes five archives, checksums, five SBOMs,
+- [x] Create and push the annotated tag: `git tag -a v0.1.0 -m "CXRE v0.1.0"`.
+- [x] Confirm the release workflow publishes five archives, checksums, five SBOMs,
       provenance, and release notes.
-- [ ] Confirm every archive-native `--help` and `--version` smoke job passes.
-- [ ] Verify an archive with `checksums.txt` and `gh attestation verify`.
-- [ ] Install from Homebrew with `brew install rcmcsweeney/tap/cxre`.
-- [ ] Run `cxre`, `cxre --utc`, and `cxre --json` from the installed release.
+- [x] Confirm every archive-native `--help` and `--version` smoke job passes.
+- [x] Verify an archive with `checksums.txt` and `gh attestation verify`.
+- [x] Install from Homebrew with `brew install rcmcsweeney/tap/cxre`.
+- [x] Run `cxre`, `cxre --utc`, and `cxre --json` from the installed release.
 
 ## Later improvements
 
