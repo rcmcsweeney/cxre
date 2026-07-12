@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-12T13:14:49Z",
+  "timezone": "Etc/UTC",
+  "available_count": 2,
+  "detailed_count": 2,
+  "missing_count": 0,
+  "complete": true,
+  "credits": [
+    {
+      "expires_at": "2026-07-12T14:44:49Z",
+      "expires_at_unix": 1783867489,
+      "remaining_seconds": 5400,
+      "expired": false,
+      "does_not_expire": false
+    },
+    {
+      "expires_at": null,
+      "expires_at_unix": null,
+      "remaining_seconds": null,
+      "expired": false,
+      "does_not_expire": true
+    }
+  ],
+  "warnings": []
+}

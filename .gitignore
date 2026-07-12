@@ -1,0 +1,15 @@
+# Build and release output
+/bin/
+/dist/
+/coverage.out
+*.exe
+
+# Local tooling
+/.idea/
+/.vscode/
+*.swp
+*.swo
+
+# Operating systems
+.DS_Store
+Thumbs.db

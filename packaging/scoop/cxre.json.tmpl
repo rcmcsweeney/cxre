@@ -1,0 +1,23 @@
+{
+  "version": "{{VERSION}}",
+  "description": "Know exactly when your Codex reset credits expire.",
+  "homepage": "https://github.com/rcmcsweeney/cxre",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/rcmcsweeney/cxre/releases/download/v{{VERSION}}/cxre_{{VERSION}}_Windows_x86_64.zip",
+      "hash": "{{SHA256}}"
+    }
+  },
+  "bin": "cxre.exe",
+  "checkver": {
+    "github": "https://github.com/rcmcsweeney/cxre"
+  },
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/rcmcsweeney/cxre/releases/download/v$version/cxre_$version_Windows_x86_64.zip"
+      }
+    }
+  }
+}

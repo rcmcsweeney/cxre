@@ -1,0 +1,107 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/goreleaser/goreleaser/v2.17.0/www/docs/static/schema.json
+version: 2
+
+project_name: cxre
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: cxre
+    main: ./cmd/cxre
+    binary: cxre
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    goamd64:
+      - v1
+    ignore:
+      - goos: windows
+        goarch: arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - >-
+        -s -w
+        -X github.com/rcmcsweeney/cxre/internal/buildinfo.Version={{ .Version }}
+        -X github.com/rcmcsweeney/cxre/internal/buildinfo.Commit={{ .Commit }}
+        -X github.com/rcmcsweeney/cxre/internal/buildinfo.BuildDate={{ .Date }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: release
+    ids:
+      - cxre
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ title .Os }}_{{ if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}'
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+      - docs/cxre-demo.svg
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+sboms:
+  - id: archive-sboms
+    artifacts: archive
+    cmd: syft
+    disable: false
+
+brews:
+  - name: cxre
+    ids:
+      - release
+    repository:
+      owner: rcmcsweeney
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    commit_author:
+      name: cxre-release-bot
+      email: actions@users.noreply.github.com
+    commit_msg_template: "brew: update cxre to {{ .Tag }}"
+    homepage: https://github.com/rcmcsweeney/cxre
+    description: Know exactly when your Codex reset credits expire.
+    license: MIT
+    skip_upload: auto
+    install: |
+      bin.install "cxre"
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/cxre --version")
+    caveats: |
+      CXRE requires Codex CLI 0.143.0 or newer and a ChatGPT sign-in.
+      Run `codex login` before running `cxre`.
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^docs(?:\\(.+\\))?:"
+      - "^test(?:\\(.+\\))?:"
+      - "^chore(?:\\(.+\\))?:"
+
+release:
+  github:
+    owner: rcmcsweeney
+    name: cxre
+  draft: false
+  prerelease: auto
+  name_template: "CXRE {{ .Tag }}"
