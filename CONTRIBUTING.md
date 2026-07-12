@@ -142,3 +142,10 @@ Maintainers release with an annotated Semantic Versioning tag such as
 smoke-tests and attests those exact bytes, publishes the verified release, then
 tests and updates the Homebrew tap. See
 [`packaging/homebrew`](packaging/homebrew) for the one-time tap setup.
+
+If a run stops before publication after its tag has become immutable, a
+maintainer may dispatch the workflow from protected `main` with that existing
+tag. Recovery repeats tag, ancestry, changelog, build, native smoke, attestation,
+release, and Homebrew checks; it never moves the tag. The `release` environment
+normally remains tag-only, so any one-run authorization for protected `main`
+must be removed immediately after the recovery finishes.
