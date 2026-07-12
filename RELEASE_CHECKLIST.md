@@ -20,7 +20,7 @@ release tag until the repository CI workflow is green.
 - [x] Commit and push the complete source tree.
 - [x] Add the repository description: `Know exactly when your Codex reset credits expire.`
 - [x] Add repository topics such as `codex`, `cli`, `golang`, `developer-tools`, and `openai`.
-- [ ] Confirm the CI workflow passes on Linux, macOS, and Windows.
+- [x] Confirm the CI workflow passes on Linux, macOS, and Windows.
 - [x] Enable private vulnerability reporting in the repository security settings.
 - [ ] Review branch protection or rulesets for `main` after the initial push.
 
