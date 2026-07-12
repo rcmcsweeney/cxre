@@ -19,16 +19,39 @@ const (
 	shutdownGrace     = 100 * time.Millisecond
 	maxMessageBytes   = 1024 * 1024
 	maxCapturedStderr = 32 * 1024
+	fiveHourMinMins   = 285
+	fiveHourMaxMins   = 315
+	weeklyMinMins     = 9576
+	weeklyMaxMins     = 10584
 )
 
-// Result is the reset-credit portion of account/rateLimits/read. AvailableCount
-// is authoritative. DetailsProvided distinguishes a null/missing detail list
-// from a fetched (possibly empty or capped) list.
+// Result contains the reset-credit contract and the recognized Codex usage
+// windows from account/rateLimits/read. AvailableCount is authoritative.
+// DetailsProvided distinguishes a null/missing detail list from a fetched
+// (possibly empty or capped) list.
 type Result struct {
 	AvailableCount  int
 	DetailsProvided bool
 	Credits         []Credit
+	FiveHour        *UsageWindow
+	Weekly          *UsageWindow
 }
+
+// UsageWindow is a recognized Codex quota window from account/rateLimits/read.
+// A nil pointer on Result means Codex did not provide that window. ResetsAt is
+// nil when the server omits it and is otherwise normalized to UTC.
+type UsageWindow struct {
+	UsedPercent float64
+	ResetsAt    *time.Time
+}
+
+type usageWindowKind uint8
+
+const (
+	usageWindowUnknown usageWindowKind = iota
+	usageWindowFiveHour
+	usageWindowWeekly
+)
 
 // Credit is one app-server detail row. IDs are opaque and must not be printed
 // by presentation code. The Provided fields distinguish an explicit null from
@@ -268,7 +291,9 @@ func parseRateLimits(raw json.RawMessage) (Result, error) {
 		return Result{}, failure(CodeProtocol, nil)
 	}
 	var envelope struct {
-		ResetCredits json.RawMessage `json:"rateLimitResetCredits"`
+		ResetCredits        json.RawMessage `json:"rateLimitResetCredits"`
+		RateLimits          json.RawMessage `json:"rateLimits"`
+		RateLimitsByLimitID json.RawMessage `json:"rateLimitsByLimitId"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return Result{}, failure(CodeProtocol, err)
@@ -293,6 +318,7 @@ func parseRateLimits(raw json.RawMessage) (Result, error) {
 	}
 
 	result := Result{AvailableCount: available}
+	parseUsageLimits(&result, envelope.RateLimits, envelope.RateLimitsByLimitID)
 	if isNullOrMissing(reset.Credits) {
 		return result, nil
 	}
@@ -323,6 +349,121 @@ func parseRateLimits(raw json.RawMessage) (Result, error) {
 		})
 	}
 	return result, nil
+}
+
+// parseUsageLimits extracts only the standard five-hour and weekly Codex
+// windows. Quota summaries are ancillary to CXRE's reset-credit contract, so
+// missing, malformed, or unfamiliar window data is ignored instead of turning
+// an otherwise valid reset-credit response into an operational failure.
+//
+// The backward-compatible rateLimits bucket is authoritative when present.
+// The codex entry in rateLimitsByLimitId fills any window or reset timestamp
+// that the legacy bucket did not provide; unrelated metered buckets are
+// deliberately ignored. A fallback timestamp never replaces the legacy
+// percentage.
+func parseUsageLimits(result *Result, legacy, byLimitID json.RawMessage) {
+	collectUsageWindows(result, legacy)
+	if usageWindowsComplete(result) {
+		return
+	}
+
+	var buckets map[string]json.RawMessage
+	if isNullOrMissing(byLimitID) || json.Unmarshal(byLimitID, &buckets) != nil {
+		return
+	}
+	collectUsageWindows(result, buckets["codex"])
+}
+
+func usageWindowsComplete(result *Result) bool {
+	return result.FiveHour != nil && result.FiveHour.ResetsAt != nil &&
+		result.Weekly != nil && result.Weekly.ResetsAt != nil
+}
+
+func collectUsageWindows(result *Result, raw json.RawMessage) {
+	if isNullOrMissing(raw) {
+		return
+	}
+	var bucket struct {
+		Primary   json.RawMessage `json:"primary"`
+		Secondary json.RawMessage `json:"secondary"`
+	}
+	if json.Unmarshal(raw, &bucket) != nil {
+		return
+	}
+	for _, candidate := range []json.RawMessage{bucket.Primary, bucket.Secondary} {
+		window, kind, ok := parseUsageWindow(candidate)
+		if !ok {
+			continue
+		}
+		switch kind {
+		case usageWindowFiveHour:
+			mergeUsageWindow(&result.FiveHour, window)
+		case usageWindowWeekly:
+			mergeUsageWindow(&result.Weekly, window)
+		}
+	}
+}
+
+func mergeUsageWindow(existing **UsageWindow, candidate *UsageWindow) {
+	if *existing == nil {
+		*existing = candidate
+		return
+	}
+	if (*existing).ResetsAt == nil && candidate.ResetsAt != nil {
+		reset := *candidate.ResetsAt
+		(*existing).ResetsAt = &reset
+	}
+}
+
+func parseUsageWindow(raw json.RawMessage) (*UsageWindow, usageWindowKind, bool) {
+	if isNullOrMissing(raw) {
+		return nil, usageWindowUnknown, false
+	}
+	var window struct {
+		UsedPercent       json.RawMessage `json:"usedPercent"`
+		WindowDurationMin json.RawMessage `json:"windowDurationMins"`
+		ResetsAt          json.RawMessage `json:"resetsAt"`
+	}
+	if json.Unmarshal(raw, &window) != nil ||
+		isNullOrMissing(window.UsedPercent) ||
+		isNullOrMissing(window.WindowDurationMin) {
+		return nil, usageWindowUnknown, false
+	}
+
+	var usedPercent float64
+	var duration int64
+	if json.Unmarshal(window.UsedPercent, &usedPercent) != nil ||
+		json.Unmarshal(window.WindowDurationMin, &duration) != nil {
+		return nil, usageWindowUnknown, false
+	}
+	kind := classifyUsageWindow(duration)
+	if kind == usageWindowUnknown {
+		return nil, usageWindowUnknown, false
+	}
+
+	var resetsAt *time.Time
+	if !isNullOrMissing(window.ResetsAt) {
+		var seconds int64
+		if json.Unmarshal(window.ResetsAt, &seconds) == nil {
+			parsed := time.Unix(seconds, 0).UTC()
+			resetsAt = &parsed
+		}
+	}
+	return &UsageWindow{
+		UsedPercent: usedPercent,
+		ResetsAt:    resetsAt,
+	}, kind, true
+}
+
+func classifyUsageWindow(durationMins int64) usageWindowKind {
+	switch {
+	case durationMins >= fiveHourMinMins && durationMins <= fiveHourMaxMins:
+		return usageWindowFiveHour
+	case durationMins >= weeklyMinMins && durationMins <= weeklyMaxMins:
+		return usageWindowWeekly
+	default:
+		return usageWindowUnknown
+	}
 }
 
 func parseUnixTime(raw json.RawMessage) (provided bool, value *time.Time, err error) {

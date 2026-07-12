@@ -2,6 +2,24 @@
   "schema_version": 1,
   "generated_at": "2026-07-12T13:14:49Z",
   "timezone": "Etc/UTC",
+  "limits": {
+    "five_hour": {
+      "used_percent": 42,
+      "remaining_percent": 58,
+      "resets_at": "2026-07-12T17:14:49Z",
+      "resets_at_unix": 1783876489,
+      "remaining_seconds": 14400,
+      "reset_due": false
+    },
+    "weekly": {
+      "used_percent": 68.5,
+      "remaining_percent": 31.5,
+      "resets_at": "2026-07-19T13:14:49Z",
+      "resets_at_unix": 1784466889,
+      "remaining_seconds": 604800,
+      "reset_due": false
+    }
+  },
   "available_count": 2,
   "detailed_count": 2,
   "missing_count": 0,

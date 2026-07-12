@@ -12,6 +12,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Added
 
 - Fast, read-only reset-credit expiration lookup through Codex app-server.
+- Five-hour and weekly percentage-left summaries with exact reset times and
+  remaining countdowns.
 - Exact local or UTC timestamps, relative countdowns, and soonest-first sorting.
 - Responsive terminal output with graceful color and Unicode fallbacks.
 - Stable JSON schema version 1 and sanitized machine-readable errors.

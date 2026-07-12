@@ -54,8 +54,9 @@ CXRE follows a narrow, read-only trust model:
   service communication and its existing authentication lifecycle.
 - It buffers only a bounded amount of child stderr for internal classification
   and never echoes that content or a raw protocol body.
-- It exposes only counts, expiration times, countdowns, completeness, and
-  allowlisted errors—not opaque IDs or account details.
+- It exposes only recognized usage percentages and reset times, credit counts,
+  expiration times, countdowns, completeness, and allowlisted errors—not opaque
+  IDs or account details.
 - It applies a deadline and cleans up the child on timeout or interruption.
 
 Setting `CXRE_CODEX` explicitly trusts that executable as Codex. Treat changes

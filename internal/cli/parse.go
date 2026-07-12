@@ -51,7 +51,7 @@ func parse(args []string) (options, error) {
 func writeHelp(out io.Writer) error {
 	_, err := fmt.Fprint(out, `CXRE — Codex Reset Expirations
 
-Know exactly when your Codex reset credits expire.
+Know when your Codex limits reset and reset credits expire.
 
 Usage:
   cxre [options]

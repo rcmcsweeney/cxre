@@ -125,6 +125,145 @@ func TestFetchPreservesMissingTimestampFields(t *testing.T) {
 	}
 }
 
+func TestFetchUsageWindows(t *testing.T) {
+	t.Run("primary and secondary", func(t *testing.T) {
+		configureHelper(t, "usage_primary_secondary")
+
+		result, err := fetchHelper(t, time.Second)
+		if err != nil {
+			t.Fatalf("fetch returned error: %v", err)
+		}
+		assertUsageWindow(t, result.FiveHour, 17.5, 1783857600)
+		assertUsageWindow(t, result.Weekly, 61, 1784376000)
+	})
+
+	t.Run("multi-bucket codex fallback", func(t *testing.T) {
+		configureHelper(t, "usage_multi_fallback")
+
+		result, err := fetchHelper(t, time.Second)
+		if err != nil {
+			t.Fatalf("fetch returned error: %v", err)
+		}
+		assertUsageWindow(t, result.FiveHour, 23, 1783858600)
+		assertUsageWindow(t, result.Weekly, 72.25, 1784462400)
+		if rendered := fmt.Sprintf("%+v", result); strings.Contains(rendered, testSecret) {
+			t.Fatalf("result leaked an ignored protocol field: %s", rendered)
+		}
+	})
+
+	t.Run("missing malformed and unrecognized windows are nonfatal", func(t *testing.T) {
+		configureHelper(t, "usage_unknown_windows")
+
+		result, err := fetchHelper(t, time.Second)
+		if err != nil {
+			t.Fatalf("fetch returned error: %v", err)
+		}
+		if result.FiveHour != nil || result.Weekly != nil {
+			t.Fatalf("unexpected recognized usage windows: %+v", result)
+		}
+		if result.AvailableCount != 0 || !result.DetailsProvided {
+			t.Fatalf("valid reset-credit data was not preserved: %+v", result)
+		}
+	})
+}
+
+func TestUsageWindowFallbackFillsOnlyMissingLegacyWindow(t *testing.T) {
+	result := Result{}
+	parseUsageLimits(
+		&result,
+		json.RawMessage(`{
+			"primary":{"usedPercent":11,"windowDurationMins":300,"resetsAt":1783857600},
+			"secondary":{"usedPercent":2,"windowDurationMins":60,"resetsAt":1783857700}
+		}`),
+		json.RawMessage(`{
+			"codex":{
+				"primary":{"usedPercent":99,"windowDurationMins":300,"resetsAt":1783857800},
+				"secondary":{"usedPercent":22,"windowDurationMins":10080,"resetsAt":1784462400}
+			}
+		}`),
+	)
+
+	assertUsageWindow(t, result.FiveHour, 11, 1783857600)
+	assertUsageWindow(t, result.Weekly, 22, 1784462400)
+}
+
+func TestUsageWindowFallbackFillsResetWithoutReplacingLegacyPercent(t *testing.T) {
+	result := Result{}
+	parseUsageLimits(
+		&result,
+		json.RawMessage(`{
+			"primary":{"usedPercent":11,"windowDurationMins":300,"resetsAt":null},
+			"secondary":{"usedPercent":22,"windowDurationMins":10080,"resetsAt":"malformed"}
+		}`),
+		json.RawMessage(`{
+			"codex":{
+				"primary":{"usedPercent":99,"windowDurationMins":300,"resetsAt":1783857800},
+				"secondary":{"usedPercent":88,"windowDurationMins":10080,"resetsAt":1784462400}
+			}
+		}`),
+	)
+
+	assertUsageWindow(t, result.FiveHour, 11, 1783857800)
+	assertUsageWindow(t, result.Weekly, 22, 1784462400)
+}
+
+func TestUsageWindowsPreservePercentWithoutResetTime(t *testing.T) {
+	result := Result{}
+	parseUsageLimits(
+		&result,
+		json.RawMessage(`{
+			"primary":{"usedPercent":33.5,"windowDurationMins":300,"resetsAt":null},
+			"secondary":{"usedPercent":44,"windowDurationMins":10080}
+		}`),
+		nil,
+	)
+
+	assertUsageWindowWithoutReset(t, result.FiveHour, 33.5)
+	assertUsageWindowWithoutReset(t, result.Weekly, 44)
+}
+
+func TestUsageWindowDurationTolerance(t *testing.T) {
+	tests := []struct {
+		name     string
+		duration int64
+		wantKind usageWindowKind
+	}{
+		{name: "five hour lower boundary", duration: 285, wantKind: usageWindowFiveHour},
+		{name: "five hour upper boundary", duration: 315, wantKind: usageWindowFiveHour},
+		{name: "below five hour tolerance", duration: 284, wantKind: usageWindowUnknown},
+		{name: "above five hour tolerance", duration: 316, wantKind: usageWindowUnknown},
+		{name: "weekly lower boundary", duration: 9576, wantKind: usageWindowWeekly},
+		{name: "weekly upper boundary", duration: 10584, wantKind: usageWindowWeekly},
+		{name: "below weekly tolerance", duration: 9575, wantKind: usageWindowUnknown},
+		{name: "above weekly tolerance", duration: 10585, wantKind: usageWindowUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := json.RawMessage(fmt.Sprintf(
+				`{"usedPercent":123.75,"windowDurationMins":%d,"resetsAt":%q}`,
+				tt.duration,
+				testSecret,
+			))
+			window, kind, ok := parseUsageWindow(raw)
+			if tt.wantKind == usageWindowUnknown {
+				if ok || kind != usageWindowUnknown || window != nil {
+					t.Fatalf("duration %d was classified as %v", tt.duration, kind)
+				}
+				return
+			}
+			if !ok || kind != tt.wantKind || window == nil {
+				t.Fatalf("duration %d = (%+v, %v, %v), want kind %v", tt.duration, window, kind, ok, tt.wantKind)
+			}
+			if window.UsedPercent != 123.75 || window.ResetsAt != nil {
+				t.Fatalf("optional reset or permissive percentage was not preserved: %+v", window)
+			}
+			if rendered := fmt.Sprintf("%+v", window); strings.Contains(rendered, testSecret) {
+				t.Fatalf("window leaked malformed reset data: %s", rendered)
+			}
+		})
+	}
+}
+
 func TestFetchAuthenticationModes(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -368,6 +507,11 @@ func TestLiveIntegration(t *testing.T) {
 			t.Fatal("live app-server returned an expiry time without its presence marker")
 		}
 	}
+	for _, window := range []*UsageWindow{result.FiveHour, result.Weekly} {
+		if window != nil && window.ResetsAt != nil && window.ResetsAt.Location() != time.UTC {
+			t.Fatal("live app-server returned a usage reset outside UTC")
+		}
+	}
 }
 
 func fetchHelper(t *testing.T, timeout time.Duration) (Result, error) {
@@ -410,6 +554,32 @@ func assertSanitized(t *testing.T, err error) {
 		if strings.Contains(rendered, testSecret) {
 			t.Fatalf("error leaked sentinel secret: %s", rendered)
 		}
+	}
+}
+
+func assertUsageWindow(t *testing.T, got *UsageWindow, wantPercent float64, wantReset int64) {
+	t.Helper()
+	if got == nil {
+		t.Fatal("usage window is nil")
+	}
+	if got.UsedPercent != wantPercent {
+		t.Fatalf("used percent = %v, want %v", got.UsedPercent, wantPercent)
+	}
+	if got.ResetsAt == nil {
+		t.Fatal("reset time is nil")
+	}
+	if got.ResetsAt.Location() != time.UTC || got.ResetsAt.Unix() != wantReset {
+		t.Fatalf("reset = %v, want Unix %d in UTC", got.ResetsAt, wantReset)
+	}
+}
+
+func assertUsageWindowWithoutReset(t *testing.T, got *UsageWindow, wantPercent float64) {
+	t.Helper()
+	if got == nil {
+		t.Fatal("usage window is nil")
+	}
+	if got.UsedPercent != wantPercent || got.ResetsAt != nil {
+		t.Fatalf("usage window = %+v, want percent %v without reset", got, wantPercent)
 	}
 }
 
@@ -535,6 +705,61 @@ func runHelper(scenario string) int {
 				"id": "opaque", "resetType": "codexRateLimits", "status": "futureStatus", "grantedAt": int64(1781654400), "expiresAt": int64(1784246400),
 			}},
 		})
+	case "usage_primary_secondary":
+		return writeFullRateResult(encoder, map[string]any{
+			"rateLimits": map[string]any{
+				"limitId": "codex",
+				"primary": map[string]any{
+					"usedPercent": 17.5, "windowDurationMins": 300, "resetsAt": int64(1783857600),
+				},
+				"secondary": map[string]any{
+					"usedPercent": 61, "windowDurationMins": 10080, "resetsAt": int64(1784376000),
+				},
+			},
+			"rateLimitResetCredits": map[string]any{"availableCount": 0, "credits": []any{}},
+		})
+	case "usage_multi_fallback":
+		return writeFullRateResult(encoder, map[string]any{
+			"rateLimits": nil,
+			"rateLimitsByLimitId": map[string]any{
+				"codex": map[string]any{
+					"limitId":   "codex",
+					"limitName": testSecret,
+					"primary": map[string]any{
+						"usedPercent": 23, "windowDurationMins": 300, "resetsAt": int64(1783858600), "private": testSecret,
+					},
+					"secondary": map[string]any{
+						"usedPercent": 72.25, "windowDurationMins": 10080, "resetsAt": int64(1784462400),
+					},
+				},
+				"codex_other": map[string]any{
+					"limitName": testSecret,
+					"primary": map[string]any{
+						"usedPercent": 100, "windowDurationMins": 300, "resetsAt": int64(1),
+					},
+				},
+			},
+			"rateLimitResetCredits": map[string]any{"availableCount": 0, "credits": []any{}},
+		})
+	case "usage_unknown_windows":
+		return writeFullRateResult(encoder, map[string]any{
+			"rateLimits": map[string]any{
+				"primary": map[string]any{
+					"usedPercent": 40, "windowDurationMins": 15, "resetsAt": int64(1783857600),
+				},
+				"secondary": map[string]any{
+					"usedPercent": testSecret, "windowDurationMins": 300, "resetsAt": nil,
+				},
+			},
+			"rateLimitsByLimitId": map[string]any{
+				"codex_other": map[string]any{
+					"primary": map[string]any{
+						"usedPercent": 55, "windowDurationMins": 10080, "resetsAt": int64(1784462400),
+					},
+				},
+			},
+			"rateLimitResetCredits": map[string]any{"availableCount": 0, "credits": []any{}},
+		})
 	case "rpc_old":
 		_ = encoder.Encode(map[string]any{"id": 2, "error": map[string]any{"code": -32601, "message": testSecret + " method not found"}})
 	case "rpc_auth":
@@ -575,9 +800,13 @@ func readHelperRequest(scanner *bufio.Scanner) (helperRequest, bool) {
 }
 
 func writeRateResult(encoder *json.Encoder, resetCredits map[string]any) int {
+	return writeFullRateResult(encoder, map[string]any{"rateLimitResetCredits": resetCredits})
+}
+
+func writeFullRateResult(encoder *json.Encoder, result map[string]any) int {
 	if err := encoder.Encode(map[string]any{
 		"id":     2,
-		"result": map[string]any{"rateLimitResetCredits": resetCredits},
+		"result": result,
 	}); err != nil {
 		return 102
 	}

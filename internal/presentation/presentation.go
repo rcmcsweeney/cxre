@@ -1,4 +1,5 @@
-// Package presentation renders reset-credit data for people and machines.
+// Package presentation renders Codex usage and reset-credit data for people
+// and machines.
 package presentation
 
 import (
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rcmcsweeney/cxre/internal/limits"
 	"github.com/rcmcsweeney/cxre/internal/reset"
 )
 
@@ -32,6 +34,14 @@ type Options struct {
 	Width    int
 }
 
+// Report is the complete presentation input. Keeping the domain outputs
+// grouped here lets future commands add views without coupling their transport
+// representations to terminal or JSON formatting.
+type Report struct {
+	Limits limits.Output
+	Resets reset.Output
+}
+
 // Error is the stable public representation of an operational failure.
 type Error struct {
 	Code    string `json:"code"`
@@ -40,14 +50,29 @@ type Error struct {
 }
 
 // RenderHuman writes the normal terminal view to out and warnings to warningOut.
-func RenderHuman(out, warningOut io.Writer, result reset.Output, options Options) error {
+func RenderHuman(out, warningOut io.Writer, report Report, options Options) error {
 	location := options.Location
 	if location == nil {
 		location = time.Local
 	}
+	result := report.Resets
 
 	heading := style("CXRE — Codex Reset Expirations", ansiBold+ansiCyan, options.Color)
 	if _, err := fmt.Fprintf(out, "%s\n\n", heading); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(out, style("Usage limits", ansiBold, options.Color)); err != nil {
+		return err
+	}
+
+	if options.Width > 0 && options.Width < 60 {
+		if err := renderLimitsStacked(out, report.Limits, location, options.Color); err != nil {
+			return err
+		}
+	} else if err := renderLimitsTable(out, report.Limits, location, options.Color); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(out); err != nil {
 		return err
 	}
 
@@ -89,6 +114,116 @@ func RenderHuman(out, warningOut io.Writer, result reset.Output, options Options
 	}
 
 	return nil
+}
+
+type humanLimitRow struct {
+	name      string
+	left      string
+	resets    string
+	remaining string
+	resetDue  bool
+}
+
+func renderLimitsTable(out io.Writer, result limits.Output, location *time.Location, color bool) error {
+	rows := limitRows(result, location)
+	windowWidth := len("Window")
+	leftWidth := len("Left")
+	resetsWidth := len("Resets")
+	remainingWidth := len("Remaining")
+	for _, row := range rows {
+		windowWidth = max(windowWidth, len(row.name))
+		leftWidth = max(leftWidth, len(row.left))
+		resetsWidth = max(resetsWidth, len(row.resets))
+		remainingWidth = max(remainingWidth, len(row.remaining))
+	}
+
+	if _, err := fmt.Fprintf(out, "%-*s  %*s  %-*s  %s\n", windowWidth, "Window", leftWidth, "Left", resetsWidth, "Resets", "Remaining"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(out, strings.Repeat("-", windowWidth+2+leftWidth+2+resetsWidth+2+remainingWidth)); err != nil {
+		return err
+	}
+	for _, row := range rows {
+		resets := fmt.Sprintf("%-*s", resetsWidth, row.resets)
+		remaining := row.remaining
+		if row.resetDue {
+			resets = style(resets, ansiRed, color)
+			remaining = style(remaining, ansiRed, color)
+		}
+		if _, err := fmt.Fprintf(out, "%-*s  %*s  %s  %s\n", windowWidth, row.name, leftWidth, row.left, resets, remaining); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func renderLimitsStacked(out io.Writer, result limits.Output, location *time.Location, color bool) error {
+	for i, row := range limitRows(result, location) {
+		resets := row.resets
+		remaining := row.remaining
+		if row.resetDue {
+			resets = style(resets, ansiRed, color)
+			remaining = style(remaining, ansiRed, color)
+		}
+		if _, err := fmt.Fprintf(out, "%s\nLeft:      %s\nResets:    %s\nRemaining: %s\n", row.name, row.left, resets, remaining); err != nil {
+			return err
+		}
+		if i != 1 {
+			if _, err := fmt.Fprintln(out); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func limitRows(result limits.Output, location *time.Location) []humanLimitRow {
+	return []humanLimitRow{
+		limitRow("5h", result.FiveHour, location),
+		limitRow("Weekly", result.Weekly, location),
+	}
+}
+
+func limitRow(name string, window *limits.Window, location *time.Location) humanLimitRow {
+	if window == nil {
+		return humanLimitRow{name: name, left: "—", resets: "—", remaining: "—"}
+	}
+	row := humanLimitRow{
+		name:      name,
+		left:      formatPercent(remainingPercent(window.UsedPercent)),
+		resets:    "—",
+		remaining: "—",
+	}
+	if window.ResetsAt == nil {
+		return row
+	}
+
+	remaining := formatRemaining(window.RemainingSeconds)
+	if window.ResetDue {
+		remaining = "reset due"
+	}
+	row.resets = window.ResetsAt.In(location).Format(exactTimeLayout)
+	row.remaining = remaining
+	row.resetDue = window.ResetDue
+	return row
+}
+
+func remainingPercent(usedPercent float64) float64 {
+	remaining := 100 - usedPercent
+	if remaining < 0 {
+		return 0
+	}
+	if remaining > 100 {
+		return 100
+	}
+	return remaining
+}
+
+func formatPercent(value float64) string {
+	if value == float64(int64(value)) {
+		return fmt.Sprintf("%.0f%%", value)
+	}
+	return fmt.Sprintf("%.1f%%", value)
 }
 
 func renderTable(out io.Writer, credits []reset.Expiration, location *time.Location, color bool) error {
@@ -163,7 +298,10 @@ func remainingTime(credit reset.Expiration) string {
 		return "expired"
 	}
 
-	seconds := credit.RemainingSeconds
+	return formatRemaining(credit.RemainingSeconds)
+}
+
+func formatRemaining(seconds int64) string {
 	switch {
 	case seconds >= 24*60*60:
 		days := seconds / (24 * 60 * 60)
@@ -212,7 +350,7 @@ func style(value, code string, enabled bool) string {
 }
 
 // RenderJSON writes the stable schema-v1 machine-readable response.
-func RenderJSON(out io.Writer, result reset.Output, options Options) error {
+func RenderJSON(out io.Writer, report Report, options Options) error {
 	location := options.Location
 	if location == nil {
 		location = time.Local
@@ -222,11 +360,16 @@ func RenderJSON(out io.Writer, result reset.Output, options Options) error {
 	if timezone == "" {
 		timezone = location.String()
 	}
+	result := report.Resets
 
 	response := jsonResponse{
-		SchemaVersion:  1,
-		GeneratedAt:    now.Format(time.RFC3339),
-		Timezone:       timezone,
+		SchemaVersion: 1,
+		GeneratedAt:   now.Format(time.RFC3339),
+		Timezone:      timezone,
+		Limits: jsonLimits{
+			FiveHour: jsonLimitWindow(report.Limits.FiveHour, location),
+			Weekly:   jsonLimitWindow(report.Limits.Weekly, location),
+		},
 		AvailableCount: result.AvailableCount,
 		DetailedCount:  result.DetailedCount,
 		MissingCount:   result.MissingCount,
@@ -264,6 +407,29 @@ func RenderJSON(out io.Writer, result reset.Output, options Options) error {
 	return encoder.Encode(response)
 }
 
+func jsonLimitWindow(window *limits.Window, location *time.Location) *jsonLimit {
+	if window == nil {
+		return nil
+	}
+	result := &jsonLimit{
+		UsedPercent:      window.UsedPercent,
+		RemainingPercent: remainingPercent(window.UsedPercent),
+	}
+	if window.ResetsAt == nil {
+		return result
+	}
+
+	resetsAt := window.ResetsAt.In(location).Truncate(time.Second).Format(time.RFC3339)
+	resetsAtUnix := window.ResetsAt.Unix()
+	remainingSeconds := window.RemainingSeconds
+	resetDue := window.ResetDue
+	result.ResetsAt = &resetsAt
+	result.ResetsAtUnix = &resetsAtUnix
+	result.RemainingSeconds = &remainingSeconds
+	result.ResetDue = &resetDue
+	return result
+}
+
 // RenderError writes a sanitized error in human or JSON form.
 func RenderError(out io.Writer, problem Error, asJSON bool) error {
 	if asJSON {
@@ -286,12 +452,27 @@ type jsonResponse struct {
 	SchemaVersion  int           `json:"schema_version"`
 	GeneratedAt    string        `json:"generated_at"`
 	Timezone       string        `json:"timezone"`
+	Limits         jsonLimits    `json:"limits"`
 	AvailableCount int           `json:"available_count"`
 	DetailedCount  int           `json:"detailed_count"`
 	MissingCount   int           `json:"missing_count"`
 	Complete       bool          `json:"complete"`
 	Credits        []jsonCredit  `json:"credits"`
 	Warnings       []jsonWarning `json:"warnings"`
+}
+
+type jsonLimits struct {
+	FiveHour *jsonLimit `json:"five_hour"`
+	Weekly   *jsonLimit `json:"weekly"`
+}
+
+type jsonLimit struct {
+	UsedPercent      float64 `json:"used_percent"`
+	RemainingPercent float64 `json:"remaining_percent"`
+	ResetsAt         *string `json:"resets_at"`
+	ResetsAtUnix     *int64  `json:"resets_at_unix"`
+	RemainingSeconds *int64  `json:"remaining_seconds"`
+	ResetDue         *bool   `json:"reset_due"`
 }
 
 type jsonCredit struct {
