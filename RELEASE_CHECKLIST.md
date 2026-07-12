@@ -18,7 +18,7 @@ release tag until the repository CI workflow is green.
 - [x] Authenticate GitHub CLI as `rcmcsweeney` with `gh auth login -h github.com`.
 - [x] Create the public repository `rcmcsweeney/cxre` with `main` as its default branch.
 - [x] Commit and push the complete source tree.
-- [x] Add the repository description: `Know exactly when your Codex reset credits expire.`
+- [x] Add the repository description: `Know when your Codex limits reset and reset credits expire.`
 - [x] Add repository topics such as `codex`, `cli`, `golang`, `developer-tools`, and `openai`.
 - [x] Confirm the CI workflow passes on Linux, macOS, and Windows.
 - [x] Enable private vulnerability reporting in the repository security settings.
@@ -26,7 +26,7 @@ release tag until the repository CI workflow is green.
 
 ## Homebrew release prerequisite
 
-- [ ] Create the public repository `rcmcsweeney/homebrew-tap` with a `main` branch.
+- [x] Create the public repository `rcmcsweeney/homebrew-tap` with a `main` branch.
 - [ ] Create a fine-grained token scoped only to `rcmcsweeney/homebrew-tap` with
       **Contents: read and write** permission.
 - [ ] Add that token to `rcmcsweeney/cxre` as the Actions secret
@@ -36,6 +36,8 @@ release tag until the repository CI workflow is green.
 ## Release `v0.1.0`
 
 - [ ] Confirm `CHANGELOG.md` and README examples are ready.
+- [ ] Replace `docs/cxre-terminal.png` with a fresh real screenshot showing the
+      `CXRE — Codex Resets` header and usage-limit summary.
 - [ ] Run `make ci` locally.
 - [ ] Create and push the annotated tag: `git tag -a v0.1.0 -m "CXRE v0.1.0"`.
 - [ ] Confirm the release workflow publishes five archives, checksums, five SBOMs,

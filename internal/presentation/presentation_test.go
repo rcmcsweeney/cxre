@@ -41,7 +41,7 @@ func TestRenderHumanTable(t *testing.T) {
 	}
 
 	for _, expected := range []string{
-		"CXRE — Codex Reset Expirations",
+		"CXRE — Codex Resets",
 		"Usage limits",
 		"Window",
 		"Left",

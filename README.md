@@ -1,12 +1,12 @@
 # CXRE
 
-> **Know exactly when your Codex reset credits expire.**
+> **Know when your Codex limits reset and reset credits expire.**
 
 [![CI](https://github.com/rcmcsweeney/cxre/actions/workflows/ci.yml/badge.svg)](https://github.com/rcmcsweeney/cxre/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/rcmcsweeney/cxre)](https://github.com/rcmcsweeney/cxre/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-CXRE (Codex Reset Expirations) is a small, read-only CLI that shows the exact
+CXRE (Codex Resets) is a small, read-only CLI that shows the exact
 expiration time for every available Codex manual reset credit. A compact
 summary above the credit table also shows the five-hour and weekly limits,
 percentage left, exact reset time, and time remaining. CXRE is a single native
@@ -38,8 +38,11 @@ Bedrock Codex environments are not supported in v0.1.
 brew install rcmcsweeney/tap/cxre
 ```
 
-The tap is updated automatically by each stable release. Codex itself remains
-a separate prerequisite.
+The fully qualified command is intentional: on a fresh machine it adds the tap
+and installs CXRE in one step while trusting only this formula. Each stable
+release publishes or updates the formula automatically. If no stable release
+is listed yet, install from source until the first formula is published. Codex
+itself remains a separate prerequisite.
 
 ### GitHub Releases
 
@@ -97,7 +100,7 @@ first release more complicated.
 ### Terminal output
 
 ```text
-CXRE — Codex Reset Expirations
+CXRE — Codex Resets
 
 Usage limits
 Window  Left  Resets                            Remaining

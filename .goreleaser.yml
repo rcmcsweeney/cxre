@@ -78,7 +78,7 @@ brews:
       email: actions@users.noreply.github.com
     commit_msg_template: "brew: update cxre to {{ .Tag }}"
     homepage: https://github.com/rcmcsweeney/cxre
-    description: Know exactly when your Codex reset credits expire.
+    description: Know when your Codex limits reset and reset credits expire.
     license: MIT
     skip_upload: auto
     install: |

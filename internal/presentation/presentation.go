@@ -57,7 +57,7 @@ func RenderHuman(out, warningOut io.Writer, report Report, options Options) erro
 	}
 	result := report.Resets
 
-	heading := style("CXRE — Codex Reset Expirations", ansiBold+ansiCyan, options.Color)
+	heading := style("CXRE — Codex Resets", ansiBold+ansiCyan, options.Color)
 	if _, err := fmt.Fprintf(out, "%s\n\n", heading); err != nil {
 		return err
 	}

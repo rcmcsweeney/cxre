@@ -11,6 +11,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `CXRE — Codex Resets` branding for the read-only reset overview.
 - Fast, read-only reset-credit expiration lookup through Codex app-server.
 - Five-hour and weekly percentage-left summaries with exact reset times and
   remaining countdowns.

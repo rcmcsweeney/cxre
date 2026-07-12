@@ -44,7 +44,7 @@ func TestWriteHelp(t *testing.T) {
 	if err := writeHelp(&output); err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"Usage:", "--json", "Codex CLI 0.143.0", "not affiliated with OpenAI"} {
+	for _, expected := range []string{"CXRE — Codex Resets", "Usage:", "--json", "Codex CLI 0.143.0", "not affiliated with OpenAI"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("help missing %q", expected)
 		}
