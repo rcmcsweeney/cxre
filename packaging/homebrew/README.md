@@ -1,9 +1,11 @@
 # Homebrew tap publication
 
-Stable CXRE tags publish `Formula/cxre.rb` to
-`rcmcsweeney/homebrew-tap` through GoReleaser. The generated formula contains
-the real release URLs and SHA-256 values, so this repository intentionally does
-not check in a placeholder formula with invalid checksums.
+Stable CXRE tags generate `Formula/cxre.rb` with GoReleaser. The release
+workflow smoke-tests and attests the exact archives, publishes them, then
+audits, installs, and tests the generated formula before copying it to
+`rcmcsweeney/homebrew-tap`. The formula contains the real release URLs and
+SHA-256 values, so this repository intentionally does not check in a
+placeholder with invalid checksums.
 
 ## One-time maintainer setup
 
@@ -12,14 +14,15 @@ not check in a placeholder formula with invalid checksums.
 2. Create a fine-grained GitHub personal access token restricted to that
    repository with **Contents: read and write** permission.
 3. Add it to `rcmcsweeney/cxre` as the Actions repository secret
-   `HOMEBREW_TAP_GITHUB_TOKEN`.
+   `HOMEBREW_TAP_GITHUB_TOKEN`, then move it into the tag-restricted `release`
+   environment before publishing with the staged workflow.
 4. Protect the secret and rotate it immediately if it is ever printed or
    exposed.
 5. Push a stable Semantic Versioning tag such as `v0.1.0`.
 
-The tag-driven release workflow supplies the token only to GoReleaser.
-GoReleaser writes `Formula/cxre.rb` to the tap's `main` branch after it has
-computed the release archive checksums.
+The build and smoke jobs never receive the token. Only the final tap-publication
+job can read it, after the GitHub release is public and the generated formula
+has passed `brew audit`, `brew install`, and `brew test`.
 
 ## Verify a publication
 

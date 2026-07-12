@@ -3,6 +3,8 @@ package presentation
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -104,6 +106,58 @@ func TestRenderHumanNarrowAndWarning(t *testing.T) {
 	}
 	if !strings.Contains(warnings.String(), "! Expiration details are unavailable") {
 		t.Fatalf("missing warning: %s", warnings.String())
+	}
+}
+
+func TestRenderHumanStylesWarningsForTheirOwnStream(t *testing.T) {
+	report := Report{Resets: reset.Output{
+		Warnings: []reset.Warning{{Message: "Synthetic warning."}},
+	}}
+
+	t.Run("redirected warning stream is plain", func(t *testing.T) {
+		var output, warnings strings.Builder
+		if err := RenderHuman(&output, &warnings, report, Options{Color: true}); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(output.String(), ansiBold) {
+			t.Fatalf("normal terminal output was not styled: %q", output.String())
+		}
+		if strings.Contains(warnings.String(), "\x1b[") || warnings.String() != "Warning: Synthetic warning.\n" {
+			t.Fatalf("redirected warning output was not plain: %q", warnings.String())
+		}
+	})
+
+	t.Run("terminal warning stream is styled", func(t *testing.T) {
+		var output, warnings strings.Builder
+		if err := RenderHuman(&output, &warnings, report, Options{WarningColor: true}); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(warnings.String(), ansiYellow+"Warning: "+ansiReset) {
+			t.Fatalf("terminal warning output was not styled: %q", warnings.String())
+		}
+	})
+}
+
+func TestREADMEExamplesMatchCanonicalReport(t *testing.T) {
+	report, options := canonicalREADMEReport(t)
+
+	var human, warnings strings.Builder
+	if err := RenderHuman(&human, &warnings, report, options); err != nil {
+		t.Fatal(err)
+	}
+	if warnings.Len() != 0 {
+		t.Fatalf("canonical report emitted warnings: %q", warnings.String())
+	}
+	if got, want := human.String(), readREADMEExample(t, "TERMINAL", "text"); got != want {
+		t.Fatalf("README terminal example drifted:\n--- rendered ---\n%s--- README ---\n%s", got, want)
+	}
+
+	var machine strings.Builder
+	if err := RenderJSON(&machine, report, options); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := machine.String(), readREADMEExample(t, "JSON", "json"); got != want {
+		t.Fatalf("README JSON example drifted:\n--- rendered ---\n%s--- README ---\n%s", got, want)
 	}
 }
 
@@ -386,4 +440,123 @@ func TestExactTimeAcrossDSTBoundary(t *testing.T) {
 	if got, want := exactTime(reset.Expiration{ExpiresAt: &after}, zone), "Sun 05 Apr 2026 2:30:00 AM NZST"; got != want {
 		t.Fatalf("after transition = %q, want %q", got, want)
 	}
+}
+
+func canonicalREADMEReport(t *testing.T) (Report, Options) {
+	t.Helper()
+	location, err := time.LoadLocation("Pacific/Auckland")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.July, 12, 13, 14, 49, 0, location)
+	fiveHourReset := time.Date(2026, time.July, 12, 17, 0, 0, 0, location)
+	weeklyReset := time.Date(2026, time.July, 18, 12, 0, 0, 0, location)
+	firstExpiry := time.Date(2026, time.July, 12, 20, 42, 17, 0, location)
+	secondExpiry := time.Date(2026, time.July, 20, 9, 0, 0, 0, location)
+	thirdExpiry := time.Date(2026, time.August, 2, 16, 3, 51, 0, location)
+
+	report := Report{
+		Limits: limits.Output{
+			FiveHour: &limits.Window{
+				UsedPercent:      37,
+				ResetsAt:         &fiveHourReset,
+				RemainingSeconds: 13_511,
+			},
+			Weekly: &limits.Window{
+				UsedPercent:      61,
+				ResetsAt:         &weeklyReset,
+				RemainingSeconds: 513_911,
+			},
+		},
+		Resets: reset.Output{
+			AvailableCount: 3,
+			DetailedCount:  3,
+			Complete:       true,
+			Credits: []reset.Expiration{
+				{ExpiresAt: &firstExpiry, RemainingSeconds: 26_848},
+				{ExpiresAt: &secondExpiry, RemainingSeconds: 675_911},
+				{ExpiresAt: &thirdExpiry, RemainingSeconds: 1_824_542},
+			},
+			Warnings: []reset.Warning{},
+		},
+	}
+	options := Options{
+		Location: location,
+		Timezone: "Pacific/Auckland",
+		Now:      now,
+		Width:    80,
+	}
+	return report, options
+}
+
+func readREADMEExample(t *testing.T, name, language string) string {
+	t.Helper()
+	readmePath := repositoryFile(t, "README.md")
+	contents, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	startMarker := "<!-- BEGIN README " + name + " EXAMPLE -->"
+	endMarker := "<!-- END README " + name + " EXAMPLE -->"
+	text := strings.ReplaceAll(string(contents), "\r\n", "\n")
+	start := strings.Index(text, startMarker)
+	if start < 0 {
+		t.Fatalf("%s does not contain %q", readmePath, startMarker)
+	}
+	start += len(startMarker)
+	endOffset := strings.Index(text[start:], endMarker)
+	if endOffset < 0 {
+		t.Fatalf("%s does not contain %q after its start marker", readmePath, endMarker)
+	}
+
+	section := text[start : start+endOffset]
+	if !strings.HasPrefix(section, "\n") || !strings.HasSuffix(section, "\n") {
+		t.Fatalf("README %s markers must be on lines surrounding the fenced block", name)
+	}
+	section = strings.TrimSuffix(strings.TrimPrefix(section, "\n"), "\n")
+	opening := "```" + language + "\n"
+	closing := "\n```"
+	if !strings.HasPrefix(section, opening) || !strings.HasSuffix(section, closing) {
+		t.Fatalf("README %s example must contain exactly one fenced %s block", name, language)
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(section, opening), closing) + "\n"
+}
+
+func repositoryFile(t *testing.T, name string) string {
+	t.Helper()
+	starts := make([]string, 0, 2)
+	if workingDirectory, err := os.Getwd(); err == nil {
+		starts = append(starts, workingDirectory)
+	}
+	if _, sourceFile, _, ok := runtime.Caller(0); ok {
+		starts = append(starts, filepath.Dir(sourceFile))
+	}
+
+	visited := make(map[string]bool)
+	for _, start := range starts {
+		directory, err := filepath.Abs(start)
+		if err != nil {
+			continue
+		}
+		for {
+			if !visited[directory] {
+				visited[directory] = true
+				module, moduleErr := os.ReadFile(filepath.Join(directory, "go.mod"))
+				candidate := filepath.Join(directory, name)
+				if moduleErr == nil && strings.Contains(string(module), "module github.com/rcmcsweeney/cxre") {
+					if _, candidateErr := os.Stat(candidate); candidateErr == nil {
+						return candidate
+					}
+				}
+			}
+			parent := filepath.Dir(directory)
+			if parent == directory {
+				break
+			}
+			directory = parent
+		}
+	}
+	t.Fatalf("could not locate repository file %s", name)
+	return ""
 }

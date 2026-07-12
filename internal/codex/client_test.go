@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"reflect"
@@ -66,6 +67,35 @@ func TestFetchCountOnly(t *testing.T) {
 	}
 	if result.AvailableCount != 3 || result.DetailsProvided || result.Credits != nil {
 		t.Fatalf("unexpected count-only result: %+v", result)
+	}
+}
+
+func TestParseRateLimitsCountOnlyWhenCreditsAreOmitted(t *testing.T) {
+	result, err := parseRateLimits(json.RawMessage(`{
+		"rateLimitResetCredits":{"availableCount":3}
+	}`))
+	if err != nil {
+		t.Fatalf("parseRateLimits returned error: %v", err)
+	}
+	if result.AvailableCount != 3 || result.DetailsProvided || result.Credits != nil {
+		t.Fatalf("unexpected omitted-details result: %#v", result)
+	}
+}
+
+func TestParseRateLimitsRejectsMalformedResetData(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		raw  string
+	}{
+		{name: "summary type", raw: `{"rateLimitResetCredits":[]}`},
+		{name: "count type", raw: `{"rateLimitResetCredits":{"availableCount":"three","credits":[]}}`},
+		{name: "details type", raw: `{"rateLimitResetCredits":{"availableCount":1,"credits":{}}}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := parseRateLimits(json.RawMessage(test.raw))
+			assertCode(t, err, CodeProtocol)
+			assertSanitized(t, err)
+		})
 	}
 }
 
@@ -294,13 +324,15 @@ func TestFetchProtocolErrorClassification(t *testing.T) {
 		{name: "RPC authentication", scenario: "rpc_auth", wantCode: CodeAuthMissing},
 		{name: "RPC network", scenario: "rpc_network", wantCode: CodeNetwork},
 		{name: "RPC timeout", scenario: "rpc_timeout", wantCode: CodeTimeout},
-		{name: "null summary", scenario: "null_summary", wantCode: CodeProtocol},
+		{name: "null summary", scenario: "null_summary", wantCode: CodeResetCreditsUnavailable},
 		{name: "missing summary", scenario: "missing_summary", wantCode: CodeCodexTooOld},
 		{name: "missing count", scenario: "missing_count", wantCode: CodeProtocol},
 		{name: "negative count", scenario: "negative_count", wantCode: CodeProtocol},
 		{name: "malformed message", scenario: "malformed", wantCode: CodeProtocol},
 		{name: "wrong response id", scenario: "wrong_id", wantCode: CodeProtocol},
 		{name: "process failure", scenario: "exit", wantCode: CodeProtocol},
+		{name: "delayed old CLI stderr", scenario: "delayed_stderr_old", wantCode: CodeCodexTooOld},
+		{name: "delayed network stderr", scenario: "delayed_stderr_network", wantCode: CodeNetwork},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -369,21 +401,36 @@ func TestFetchExecutableNotFound(t *testing.T) {
 	assertCode(t, err, CodeCodexNotFound)
 }
 
+func TestFetchExplicitExecutableInvalid(t *testing.T) {
+	_, err := fetch(context.Background(), fetchOptions{
+		executable:         t.TempDir() + string(os.PathSeparator) + "missing-codex",
+		explicitExecutable: true,
+		clientVersion:      "test",
+		timeout:            time.Second,
+	})
+	assertCode(t, err, CodeCodexInvalidExecutable)
+	assertSanitized(t, err)
+}
+
 func TestResolvePath(t *testing.T) {
 	tests := []struct {
-		name        string
-		envValue    string
-		envSet      bool
-		pathValue   string
-		pathErr     error
-		want        string
-		wantCode    Code
-		lookPathHit bool
+		name         string
+		envValue     string
+		envSet       bool
+		pathValue    string
+		pathErr      error
+		want         string
+		wantLookup   string
+		wantExplicit bool
+		wantCode     Code
+		lookPathHit  bool
 	}{
-		{name: "environment wins", envValue: "/custom/codex", envSet: true, pathValue: "/path/codex", want: "/custom/codex"},
-		{name: "PATH fallback", pathValue: "/path/codex", want: "/path/codex", lookPathHit: true},
-		{name: "explicit empty is invalid", envSet: true, wantCode: CodeCodexNotFound},
-		{name: "not on PATH", pathErr: exec.ErrNotFound, wantCode: CodeCodexNotFound, lookPathHit: true},
+		{name: "environment wins", envValue: "/custom/codex", envSet: true, pathValue: "/resolved/custom/codex", want: "/resolved/custom/codex", wantLookup: "/custom/codex", wantExplicit: true, lookPathHit: true},
+		{name: "configured command uses PATH", envValue: "custom-codex", envSet: true, pathValue: "/path/custom-codex", want: "/path/custom-codex", wantLookup: "custom-codex", wantExplicit: true, lookPathHit: true},
+		{name: "PATH fallback", pathValue: "/path/codex", want: "/path/codex", wantLookup: "codex", lookPathHit: true},
+		{name: "explicit empty is invalid", envSet: true, wantCode: CodeCodexInvalidExecutable},
+		{name: "explicit target is missing", envValue: "/missing/codex", envSet: true, pathErr: exec.ErrNotFound, wantLookup: "/missing/codex", wantCode: CodeCodexInvalidExecutable, lookPathHit: true},
+		{name: "not on PATH", pathErr: exec.ErrNotFound, wantLookup: "codex", wantCode: CodeCodexNotFound, lookPathHit: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -397,8 +444,8 @@ func TestResolvePath(t *testing.T) {
 				},
 				func(name string) (string, error) {
 					called = true
-					if name != "codex" {
-						t.Fatalf("unexpected path lookup: %q", name)
+					if name != tt.wantLookup {
+						t.Fatalf("path lookup = %q, want %q", name, tt.wantLookup)
 					}
 					return tt.pathValue, tt.pathErr
 				},
@@ -408,8 +455,8 @@ func TestResolvePath(t *testing.T) {
 			} else if err != nil {
 				t.Fatalf("resolvePath returned error: %v", err)
 			}
-			if got != tt.want {
-				t.Fatalf("resolvePath = %q, want %q", got, tt.want)
+			if got.path != tt.want || got.explicit != tt.wantExplicit {
+				t.Fatalf("resolvePath = %#v, want path %q explicit %t", got, tt.want, tt.wantExplicit)
 			}
 			if called != tt.lookPathHit {
 				t.Fatalf("lookPath called = %v, want %v", called, tt.lookPathHit)
@@ -418,12 +465,36 @@ func TestResolvePath(t *testing.T) {
 	}
 }
 
+func TestResolvePathRejectsRealInvalidSelections(t *testing.T) {
+	directory := t.TempDir()
+	plainFile := directory + string(os.PathSeparator) + "not-codex"
+	if err := os.WriteFile(plainFile, []byte("not an executable"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, selected := range []string{directory, plainFile} {
+		t.Run(selected, func(t *testing.T) {
+			_, err := resolvePath(
+				func(string) (string, bool) { return selected, true },
+				exec.LookPath,
+			)
+			assertCode(t, err, CodeCodexInvalidExecutable)
+			assertSanitized(t, err)
+			if strings.Contains(fmt.Sprintf("%+v", err), selected) {
+				t.Fatal("invalid executable error leaked the configured path")
+			}
+		})
+	}
+}
+
 func TestErrorContract(t *testing.T) {
 	for _, code := range []Code{
 		CodeCodexNotFound,
+		CodeCodexInvalidExecutable,
 		CodeAuthMissing,
 		CodeUnsupportedAuth,
 		CodeCodexTooOld,
+		CodeResetCreditsUnavailable,
 		CodeTimeout,
 		CodeNetwork,
 		CodeProtocol,
@@ -439,6 +510,34 @@ func TestErrorContract(t *testing.T) {
 	}
 	if CodeOf(errors.New("foreign")) != CodeProtocol {
 		t.Fatal("foreign errors must map to protocol")
+	}
+}
+
+func TestNewErrorText(t *testing.T) {
+	tests := []struct {
+		code    Code
+		message string
+		action  string
+	}{
+		{
+			code:    CodeCodexInvalidExecutable,
+			message: "CXRE cannot start the selected Codex CLI.",
+			action:  "Correct or unset `CXRE_CODEX`, or reinstall Codex, then run `cxre` again.",
+		},
+		{
+			code:    CodeResetCreditsUnavailable,
+			message: "Codex did not provide reset-credit information for this account.",
+			action:  "Try again later. If this continues, reset credits may not be available for your ChatGPT plan or workspace.",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.code), func(t *testing.T) {
+			err := failure(tt.code, errors.New(testSecret))
+			if err.Message != tt.message || err.Action != tt.action {
+				t.Fatalf("error text = (%q, %q), want (%q, %q)", err.Message, err.Action, tt.message, tt.action)
+			}
+			assertSanitized(t, err)
+		})
 	}
 }
 
@@ -470,12 +569,17 @@ func TestStderrFailureClassification(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var capture limitedCapture
 			_, _ = capture.Write([]byte(tt.text))
-			transport := jsonlTransport{ctx: context.Background(), stderr: &capture}
-			err := transport.ioFailure(errors.New(testSecret))
+			err := classifyTransportFailure(&transportIOError{}, capture.String())
 			assertCode(t, err, tt.code)
 			assertSanitized(t, err)
 		})
 	}
+
+	t.Run("request context wins", func(t *testing.T) {
+		err := classifyTransportFailure(&transportIOError{timedOut: true}, "unrecognized subcommand 'app-server'")
+		assertCode(t, err, CodeTimeout)
+		assertSanitized(t, err)
+	})
 }
 
 // TestLiveIntegration is deliberately opt-in: it uses the caller's existing
@@ -586,6 +690,18 @@ func assertUsageWindowWithoutReset(t *testing.T, got *UsageWindow, wantPercent f
 func runHelper(scenario string) int {
 	if !reflect.DeepEqual(os.Args[1:], []string{"app-server", "--stdio"}) {
 		return 90
+	}
+	if scenario == "delayed_stderr_old" || scenario == "delayed_stderr_network" {
+		_ = os.Stdout.Close()
+		// The client closes stdin as it begins shutdown. Waiting for that EOF makes
+		// this diagnostic arrive after stdout failure without racing the kill grace.
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		if scenario == "delayed_stderr_old" {
+			_, _ = fmt.Fprintln(os.Stderr, testSecret+" unrecognized subcommand 'app-server'")
+		} else {
+			_, _ = fmt.Fprintln(os.Stderr, testSecret+" failed to connect")
+		}
+		return 89
 	}
 	if scenario == "exit" {
 		_, _ = fmt.Fprintln(os.Stderr, testSecret)

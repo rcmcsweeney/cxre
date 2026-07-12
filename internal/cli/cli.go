@@ -2,6 +2,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rcmcsweeney/cxre/internal/buildinfo"
@@ -57,9 +59,102 @@ func defaultDependencies() dependencies {
 
 // Run executes CXRE and returns a process exit code.
 func Run(args []string, stdout, stderr io.Writer) int {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-	return run(ctx, args, stdout, stderr, defaultDependencies())
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, handledSignals()...)
+	return runWithSignals(args, stdout, stderr, defaultDependencies(), signals, func() {
+		signal.Stop(signals)
+	})
+}
+
+// runWithSignals keeps process-signal mechanics outside the command logic so
+// cancellation behavior is deterministic and testable. The first signal is
+// unregistered before the request is canceled; a second signal therefore uses
+// the operating system's default behavior instead of waiting for cleanup.
+func runWithSignals(
+	args []string,
+	stdout, stderr io.Writer,
+	deps dependencies,
+	signals <-chan os.Signal,
+	stopSignals func(),
+) int {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stagedStdout := &stagedOutput{destination: stdout}
+	stagedStderr := &stagedOutput{destination: stderr}
+
+	var stopOnce sync.Once
+	stop := func() {
+		stopOnce.Do(stopSignals)
+	}
+
+	done := make(chan struct{})
+	signalExit := make(chan int, 1)
+	var watcher sync.WaitGroup
+	watcher.Add(1)
+	go func() {
+		defer watcher.Done()
+		handle := func(received os.Signal) {
+			exitCode := exitCodeForSignal(received)
+			stop()
+			signalExit <- exitCode
+			cancel()
+		}
+		select {
+		case received := <-signals:
+			handle(received)
+		case <-done:
+			// If completion and a signal raced, prefer the signal that was already
+			// delivered rather than returning a successful or operational status.
+			select {
+			case received := <-signals:
+				handle(received)
+			default:
+			}
+		}
+	}()
+
+	exitCode := run(ctx, args, stagedStdout, stagedStderr, deps)
+	close(done)
+	watcher.Wait()
+	stop()
+
+	select {
+	case interruptedExit := <-signalExit:
+		return interruptedExit
+	default:
+	}
+	// A signal can be queued after the watcher observes normal completion but
+	// before signal.Stop returns. Drain that final delivery before committing
+	// staged output so the interruption remains silent.
+	select {
+	case received := <-signals:
+		return exitCodeForSignal(received)
+	default:
+	}
+
+	if err := stagedStdout.commit(); err != nil {
+		parsed, _ := parse(args)
+		return renderFailure(stderr, parsed.json)
+	}
+	if err := stagedStderr.commit(); err != nil {
+		// stderr itself is unavailable, so there is nowhere safe to report the
+		// otherwise sanitized output error.
+		return 1
+	}
+	return exitCode
+}
+
+// stagedOutput prevents a late signal from leaving a successful document or a
+// warning behind while runWithSignals returns an interruption status. Terminal
+// detection still sees the destination stream through streamFD below.
+type stagedOutput struct {
+	destination io.Writer
+	bytes.Buffer
+}
+
+func (output *stagedOutput) commit() error {
+	_, err := io.Copy(output.destination, &output.Buffer)
+	return err
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer, deps dependencies) int {
@@ -95,8 +190,14 @@ func runExpirations(ctx context.Context, parsed options, stdout, stderr io.Write
 	defer cancel()
 	raw, err := deps.fetch(requestCtx, buildinfo.Current().Version)
 	if err != nil {
+		if ctx.Err() != nil {
+			return 1
+		}
 		problem := publicError(err)
 		_ = presentation.RenderError(stderr, problem, parsed.json)
+		return 1
+	}
+	if ctx.Err() != nil {
 		return 1
 	}
 
@@ -149,7 +250,7 @@ func runExpirations(ctx context.Context, parsed options, stdout, stderr io.Write
 		return 0
 	}
 
-	decorateTerminal(stdout, &presentationOptions, deps)
+	decorateTerminal(stdout, stderr, &presentationOptions, deps)
 	if err := presentation.RenderHuman(stdout, stderr, report, presentationOptions); err != nil {
 		return renderFailure(stderr, false)
 	}
@@ -204,12 +305,13 @@ func renderFailure(stderr io.Writer, asJSON bool) int {
 	return 1
 }
 
-func decorateTerminal(stdout io.Writer, options *presentation.Options, deps dependencies) {
-	file, ok := stdout.(*os.File)
+func decorateTerminal(stdout, stderr io.Writer, options *presentation.Options, deps dependencies) {
+	options.WarningColor = terminalSupportsColor(stderr, deps)
+
+	fd, ok := streamFD(stdout)
 	if !ok {
 		return
 	}
-	fd := int(file.Fd())
 	if !deps.isTerminal(fd) {
 		return
 	}
@@ -219,6 +321,25 @@ func decorateTerminal(stdout io.Writer, options *presentation.Options, deps depe
 	}
 	options.Color = supportsColor(deps)
 	options.Unicode = supportsUnicode(deps)
+}
+
+func terminalSupportsColor(out io.Writer, deps dependencies) bool {
+	fd, ok := streamFD(out)
+	if !ok || !deps.isTerminal(fd) {
+		return false
+	}
+	return supportsColor(deps)
+}
+
+func streamFD(out io.Writer) (int, bool) {
+	if staged, ok := out.(*stagedOutput); ok {
+		out = staged.destination
+	}
+	file, ok := out.(*os.File)
+	if !ok {
+		return 0, false
+	}
+	return int(file.Fd()), true
 }
 
 func supportsColor(deps dependencies) bool {

@@ -62,8 +62,8 @@ type Warning struct {
 
 // Output is the normalized reset-credit view consumed by presentation code.
 // Credits is always sorted by soonest expiration, with non-expiring credits
-// last and opaque ID as the deterministic tie-break. AvailableCount always
-// reflects the authoritative server count.
+// last and opaque ID, when present, as the deterministic tie-break.
+// AvailableCount always reflects the authoritative server count.
 type Output struct {
 	AvailableCount int
 	DetailedCount  int
@@ -105,9 +105,39 @@ func Build(snapshot Snapshot, now time.Time) Output {
 	}
 
 	unknownStatus := false
+	inconsistentIdentity := false
+	seenIDs := make(map[string]struct{}, len(snapshot.Credits))
+	selectedAvailableIDs := make(map[string]struct{}, len(snapshot.Credits))
 	for _, credit := range snapshot.Credits {
+		if credit.ID == "" {
+			// Every fetched detail row is expected to have an identity, including
+			// rows in non-available states. Without one, the snapshot cannot be
+			// correlated reliably even when no expiration would be displayed.
+			inconsistentIdentity = true
+		} else {
+			if _, seen := seenIDs[credit.ID]; seen {
+				// Even identical rows are inconsistent: a credit identity is expected
+				// to occur at most once in one fetched snapshot.
+				inconsistentIdentity = true
+			} else {
+				seenIDs[credit.ID] = struct{}{}
+			}
+		}
+
 		switch credit.Status {
 		case statusAvailable:
+			if credit.ID == "" {
+				// Preserve usable data, but do not merge unrelated anonymous rows or
+				// pretend that they can be correlated reliably.
+				output.Credits = append(output.Credits, expirationFrom(credit, now))
+				continue
+			}
+			if _, selected := selectedAvailableIDs[credit.ID]; selected {
+				// Retain the first available row within this ambiguous identity
+				// group. A repeated row was already marked inconsistent.
+				continue
+			}
+			selectedAvailableIDs[credit.ID] = struct{}{}
 			output.Credits = append(output.Credits, expirationFrom(credit, now))
 		case statusRedeeming, statusRedeemed:
 			// These are known states, but they are not available credits.
@@ -129,12 +159,12 @@ func Build(snapshot Snapshot, now time.Time) Output {
 
 	output.DetailedCount = len(output.Credits)
 	output.MissingCount = availableCount - output.DetailedCount
-	output.Complete = !invalidCount && !unknownStatus && !overCount && output.MissingCount == 0
+	output.Complete = !invalidCount && !unknownStatus && !inconsistentIdentity && !overCount && output.MissingCount == 0
 
 	if output.MissingCount > 0 {
 		output.Warnings = append(output.Warnings, partialWarning(output.MissingCount))
 	}
-	if invalidCount || unknownStatus || overCount {
+	if invalidCount || unknownStatus || inconsistentIdentity || overCount {
 		output.Warnings = append(output.Warnings, inconsistentWarning())
 	}
 

@@ -11,13 +11,15 @@ import "errors"
 type Code string
 
 const (
-	CodeCodexNotFound   Code = "codex_not_found"
-	CodeAuthMissing     Code = "auth_missing"
-	CodeUnsupportedAuth Code = "unsupported_auth"
-	CodeCodexTooOld     Code = "codex_too_old"
-	CodeTimeout         Code = "timeout"
-	CodeNetwork         Code = "network"
-	CodeProtocol        Code = "protocol"
+	CodeCodexNotFound           Code = "codex_not_found"
+	CodeCodexInvalidExecutable  Code = "codex_invalid_executable"
+	CodeAuthMissing             Code = "auth_missing"
+	CodeUnsupportedAuth         Code = "unsupported_auth"
+	CodeCodexTooOld             Code = "codex_too_old"
+	CodeResetCreditsUnavailable Code = "reset_credits_unavailable"
+	CodeTimeout                 Code = "timeout"
+	CodeNetwork                 Code = "network"
+	CodeProtocol                Code = "protocol"
 )
 
 // Error is safe to present to a user. It intentionally retains no raw
@@ -49,12 +51,16 @@ func errorText(code Code) (message, action string) {
 	switch code {
 	case CodeCodexNotFound:
 		return "Unable to find the Codex CLI.", "Install Codex 0.143.0 or newer, then run cxre again."
+	case CodeCodexInvalidExecutable:
+		return "CXRE cannot start the selected Codex CLI.", "Correct or unset `CXRE_CODEX`, or reinstall Codex, then run `cxre` again."
 	case CodeAuthMissing:
 		return "Unable to find Codex authentication.", "Run `codex login`, sign in with ChatGPT, then run `cxre` again."
 	case CodeUnsupportedAuth:
 		return "CXRE requires a ChatGPT Codex sign-in.", "Run `codex logout`, then `codex login` and sign in with ChatGPT."
 	case CodeCodexTooOld:
 		return "This Codex CLI does not support reset credit expirations.", "Update Codex to version 0.143.0 or newer, then try again."
+	case CodeResetCreditsUnavailable:
+		return "Codex did not provide reset-credit information for this account.", "Try again later. If this continues, reset credits may not be available for your ChatGPT plan or workspace."
 	case CodeTimeout:
 		return "Codex did not respond in time.", "Try again. If the problem continues, check your network connection."
 	case CodeNetwork:
