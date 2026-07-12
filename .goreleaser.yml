@@ -51,7 +51,7 @@ archives:
       - LICENSE
       - README.md
       - CHANGELOG.md
-      - docs/cxre-demo.svg
+      - docs/cxre-terminal.png
 
 checksum:
   name_template: checksums.txt

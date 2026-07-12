@@ -14,9 +14,10 @@ useful countdown without hiding the underlying timestamp.
 CXRE is an **unofficial community tool**. It is not affiliated with, endorsed
 by, or maintained by OpenAI.
 
-![CXRE terminal output using fictional data](docs/cxre-demo.svg)
+![CXRE terminal output showing four reset-credit expirations](docs/cxre-terminal.png)
 
-The screenshot and every example in this README use fictional data.
+The screenshot shows CXRE's current terminal output. Text examples below use
+fictional data.
 
 ## Requirements
 
