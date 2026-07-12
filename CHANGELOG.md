@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-12
+
 ### Fixed
 
 - Report reset-credit information that Codex explicitly marks unavailable with
@@ -50,5 +52,6 @@ sanitized error codes and conventional interruption exit statuses.
   GitHub build provenance.
 - Automated Homebrew tap publication and a future Scoop manifest template.
 
-[Unreleased]: https://github.com/rcmcsweeney/cxre/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/rcmcsweeney/cxre/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/rcmcsweeney/cxre/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/rcmcsweeney/cxre/releases/tag/v0.1.0
