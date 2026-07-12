@@ -229,7 +229,7 @@ func TestRenderJSONStableAndSanitized(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := output.String(), string(golden); got != want {
+	if got, want := output.String(), strings.ReplaceAll(string(golden), "\r\n", "\n"); got != want {
 		t.Fatalf("JSON schema output changed:\n--- got ---\n%s--- want ---\n%s", got, want)
 	}
 
