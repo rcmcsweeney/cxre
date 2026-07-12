@@ -3,12 +3,135 @@ package cli
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/rcmcsweeney/cxre/internal/codex"
+	"github.com/rcmcsweeney/cxre/internal/presentation"
 )
+
+func TestInterruptIsSilentAndRestoresDefaultBeforeCancellation(t *testing.T) {
+	testSignalExit(t, os.Interrupt, 130)
+}
+
+func TestInterruptAfterFetchDiscardsStagedSuccess(t *testing.T) {
+	nowStarted := make(chan struct{})
+	releaseNow := make(chan struct{})
+	deps := testDependencies()
+	deps.now = func() time.Time {
+		close(nowStarted)
+		<-releaseNow
+		return time.Date(2026, time.July, 12, 1, 0, 0, 0, time.UTC)
+	}
+
+	signals := make(chan os.Signal, 1)
+	type result struct {
+		exit   int
+		stdout string
+		stderr string
+	}
+	finished := make(chan result, 1)
+	go func() {
+		var stdout, stderr strings.Builder
+		exit := runWithSignals(nil, &stdout, &stderr, deps, signals, func() {})
+		finished <- result{exit: exit, stdout: stdout.String(), stderr: stderr.String()}
+	}()
+
+	select {
+	case <-nowStarted:
+	case <-time.After(time.Second):
+		t.Fatal("normalization did not start")
+	}
+	signals <- os.Interrupt
+	close(releaseNow)
+
+	select {
+	case got := <-finished:
+		if got.exit != 130 || got.stdout != "" || got.stderr != "" {
+			t.Fatalf("exit=%d stdout=%q stderr=%q, want silent exit 130", got.exit, got.stdout, got.stderr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("signal did not stop the command")
+	}
+}
+
+func TestRealTimeoutStillRendersAnError(t *testing.T) {
+	deps := testDependencies()
+	deps.fetch = func(context.Context, string) (codex.Result, error) {
+		return codex.Result{}, &codex.Error{
+			Code:    codex.CodeTimeout,
+			Message: "Codex did not respond in time.",
+			Action:  "Try again.",
+		}
+	}
+
+	var stdout, stderr strings.Builder
+	code := run(context.Background(), []string{"--json"}, &stdout, &stderr, deps)
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
+	}
+	if stdout.Len() != 0 || !strings.Contains(stderr.String(), `"code":"timeout"`) {
+		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunWithSignalsStopsWatcherAfterNormalCompletion(t *testing.T) {
+	signals := make(chan os.Signal, 1)
+	stopped := make(chan struct{})
+	var stdout, stderr strings.Builder
+	code := runWithSignals(
+		[]string{"--help"},
+		&stdout,
+		&stderr,
+		testDependencies(),
+		signals,
+		func() { close(stopped) },
+	)
+	if code != 0 || !strings.Contains(stdout.String(), "Usage:") || stderr.Len() != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("signal delivery was not stopped after normal completion")
+	}
+}
+
+func TestRunWithSignalsReportsStagedCommitFailure(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "human", args: []string{"--help"}, want: "Unable to write CXRE output.\n"},
+		{name: "JSON", args: []string{"--json"}, want: "{\"error\":{\"code\":\"output\",\"message\":\"Unable to write CXRE output.\"}}\n"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stderr strings.Builder
+			code := runWithSignals(
+				test.args,
+				failingWriter{},
+				&stderr,
+				testDependencies(),
+				make(chan os.Signal),
+				func() {},
+			)
+			if code != 1 || stderr.String() != test.want {
+				t.Fatalf("exit=%d stderr=%q, want exit 1 and %q", code, stderr.String(), test.want)
+			}
+		})
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write failed")
+}
 
 func TestHelpAndVersionDoNotFetch(t *testing.T) {
 	deps := testDependencies()
@@ -196,6 +319,50 @@ func TestSanitizedCodexError(t *testing.T) {
 	}
 }
 
+func TestNewErrorJSONContracts(t *testing.T) {
+	tests := []struct {
+		name    string
+		problem *codex.Error
+		want    string
+	}{
+		{
+			name: "invalid selected executable",
+			problem: &codex.Error{
+				Code:    codex.CodeCodexInvalidExecutable,
+				Message: "CXRE cannot start the selected Codex CLI.",
+				Action:  "Correct or unset `CXRE_CODEX`, or reinstall Codex, then run `cxre` again.",
+			},
+			want: "{\"error\":{\"code\":\"codex_invalid_executable\",\"message\":\"CXRE cannot start the selected Codex CLI.\",\"action\":\"Correct or unset `CXRE_CODEX`, or reinstall Codex, then run `cxre` again.\"}}\n",
+		},
+		{
+			name: "reset credits unavailable",
+			problem: &codex.Error{
+				Code:    codex.CodeResetCreditsUnavailable,
+				Message: "Codex did not provide reset-credit information for this account.",
+				Action:  "Try again later. If this continues, reset credits may not be available for your ChatGPT plan or workspace.",
+			},
+			want: "{\"error\":{\"code\":\"reset_credits_unavailable\",\"message\":\"Codex did not provide reset-credit information for this account.\",\"action\":\"Try again later. If this continues, reset credits may not be available for your ChatGPT plan or workspace.\"}}\n",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			deps := testDependencies()
+			deps.fetch = func(context.Context, string) (codex.Result, error) {
+				return codex.Result{}, test.problem
+			}
+
+			var stdout, stderr strings.Builder
+			if code := run(context.Background(), []string{"--json"}, &stdout, &stderr, deps); code != 1 {
+				t.Fatalf("exit = %d, want 1", code)
+			}
+			if stdout.Len() != 0 || stderr.String() != test.want {
+				t.Fatalf("stdout=%q stderr=%q, want stderr %q", stdout.String(), stderr.String(), test.want)
+			}
+		})
+	}
+}
+
 func TestUnknownErrorIsNotEchoed(t *testing.T) {
 	deps := testDependencies()
 	deps.fetch = func(context.Context, string) (codex.Result, error) {
@@ -232,6 +399,68 @@ func TestTerminalCapabilities(t *testing.T) {
 	if supportsUnicode(deps) {
 		t.Fatal("TERM=dumb should disable Unicode")
 	}
+}
+
+func TestDecorateTerminalTreatsWarningStreamIndependently(t *testing.T) {
+	stdoutRead, stdoutWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderrRead, stderrWrite, err := os.Pipe()
+	if err != nil {
+		_ = stdoutRead.Close()
+		_ = stdoutWrite.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = stdoutRead.Close()
+		_ = stdoutWrite.Close()
+		_ = stderrRead.Close()
+		_ = stderrWrite.Close()
+	})
+
+	stdoutFD := int(stdoutWrite.Fd())
+	stderrFD := int(stderrWrite.Fd())
+	deps := testDependencies()
+	deps.lookupEnv = func(key string) (string, bool) {
+		if key == "LANG" {
+			return "en_NZ.UTF-8", true
+		}
+		return "", false
+	}
+	deps.termSize = func(fd int) (int, int, error) {
+		if fd != stdoutFD {
+			t.Fatalf("termSize called for fd %d, want stdout fd %d", fd, stdoutFD)
+		}
+		return 72, 24, nil
+	}
+
+	t.Run("redirected stderr remains plain", func(t *testing.T) {
+		deps.isTerminal = func(fd int) bool { return fd == stdoutFD }
+		var options presentation.Options
+		decorateTerminal(stdoutWrite, stderrWrite, &options, deps)
+		if !options.Color || !options.Unicode || options.Width != 72 || options.WarningColor {
+			t.Fatalf("unexpected options: %+v", options)
+		}
+	})
+
+	t.Run("terminal stderr may use color independently", func(t *testing.T) {
+		deps.isTerminal = func(fd int) bool { return fd == stderrFD }
+		var options presentation.Options
+		decorateTerminal(stdoutWrite, stderrWrite, &options, deps)
+		if options.Color || options.Unicode || options.Width != 0 || !options.WarningColor {
+			t.Fatalf("unexpected options: %+v", options)
+		}
+	})
+
+	t.Run("non-file stderr remains plain", func(t *testing.T) {
+		deps.isTerminal = func(int) bool { return true }
+		var options presentation.Options
+		decorateTerminal(stdoutWrite, &strings.Builder{}, &options, deps)
+		if !options.Color || options.WarningColor {
+			t.Fatalf("unexpected options: %+v", options)
+		}
+	})
 }
 
 func TestTimezoneName(t *testing.T) {
@@ -302,5 +531,60 @@ func testDependencies() dependencies {
 		readlink:   func(string) (string, error) { return "", errors.New("not found") },
 		local:      time.UTC,
 		goos:       "darwin",
+	}
+}
+
+func testSignalExit(t *testing.T, received os.Signal, wantExit int) {
+	t.Helper()
+
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	stoppedBeforeCancel := make(chan bool, 1)
+	deps := testDependencies()
+	deps.fetch = func(ctx context.Context, _ string) (codex.Result, error) {
+		close(started)
+		<-ctx.Done()
+		select {
+		case <-stopped:
+			stoppedBeforeCancel <- true
+		default:
+			stoppedBeforeCancel <- false
+		}
+		return codex.Result{}, ctx.Err()
+	}
+
+	signals := make(chan os.Signal, 1)
+	type result struct {
+		exit   int
+		stdout string
+		stderr string
+	}
+	finished := make(chan result, 1)
+	go func() {
+		var stdout, stderr strings.Builder
+		exit := runWithSignals(nil, &stdout, &stderr, deps, signals, func() {
+			close(stopped)
+		})
+		finished <- result{exit: exit, stdout: stdout.String(), stderr: stderr.String()}
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("fetch did not start")
+	}
+	signals <- received
+
+	var got result
+	select {
+	case got = <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("signal did not stop the command")
+	}
+	if got.exit != wantExit || got.stdout != "" || got.stderr != "" {
+		t.Fatalf("exit=%d stdout=%q stderr=%q, want silent exit %d", got.exit, got.stdout, got.stderr, wantExit)
+	}
+	if !<-stoppedBeforeCancel {
+		t.Fatal("signal delivery was not stopped before request cancellation")
 	}
 }

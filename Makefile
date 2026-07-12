@@ -64,7 +64,7 @@ snapshot:
 	goreleaser release --snapshot --clean
 
 release:
-	goreleaser release --clean
+	goreleaser release --skip=publish --clean
 
 clean:
 	$(GO) clean

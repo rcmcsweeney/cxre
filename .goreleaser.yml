@@ -51,7 +51,12 @@ archives:
       - LICENSE
       - README.md
       - CHANGELOG.md
+      - SECURITY.md
+      - CONTRIBUTING.md
       - docs/cxre-terminal.png
+      - packaging/homebrew/README.md
+      - packaging/scoop/README.md
+      - packaging/scoop/cxre.json.tmpl
 
 checksum:
   name_template: checksums.txt
@@ -80,7 +85,9 @@ brews:
     homepage: https://github.com/rcmcsweeney/cxre
     description: Know when your Codex limits reset and reset credits expire
     license: MIT
-    skip_upload: auto
+    # The staged release workflow publishes this tested formula only after the
+    # exact archives have passed native smoke tests and attestation.
+    skip_upload: true
     install: |
       bin.install "cxre"
     test: |
@@ -102,6 +109,8 @@ release:
   github:
     owner: rcmcsweeney
     name: cxre
-  draft: false
+  # Direct GoReleaser runs may create at most a draft. The tag workflow uses
+  # --skip=publish and promotes its independently verified draft with gh.
+  draft: true
   prerelease: auto
   name_template: "CXRE {{ .Tag }}"

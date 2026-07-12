@@ -71,8 +71,9 @@ make snapshot
 ```
 
 `make tidy-check` uses `go mod tidy -diff`, so it checks module files without
-rewriting them. CI also smoke-tests `--help` and `--version` on macOS, Linux,
-and Windows.
+rewriting them. CI tests with the minimum supported Go version and runs the
+full fake app-server suite before native `--help` and `--version` smoke tests
+on macOS, Linux, and Windows.
 
 ## Testing app-server behavior
 
@@ -81,10 +82,11 @@ Fake-process tests should cover both successful and hostile input, including:
 - initialization and request ordering;
 - interleaved notifications;
 - malformed, unknown, and truncated messages;
-- timeouts, signals, crashes, and bounded stderr;
+- timeouts, interruptions, crashes, delayed stderr, and bounded stderr;
 - missing, ChatGPT, API-key-only, and Bedrock authentication modes;
 - recognized, missing, malformed, and multi-bucket usage-limit windows;
-- zero, partial, capped, count-only, and non-expiring credits;
+- unavailable, zero, partial, capped, count-only, duplicate, conflicting, and
+  non-expiring credits;
 - sentinel secrets that must never reach stdout, stderr, JSON errors, or logs.
 
 Do not add real credentials or captured account payloads as fixtures.
@@ -103,6 +105,7 @@ or account information in snapshots or test logs.
 - Treat JSON schema version 1 and documented error codes as public contracts.
 - Prefer additive JSON fields; incompatible changes require a schema bump.
 - Unknown flags and positional commands must continue to exit 2.
+- Ctrl-C and Unix SIGTERM exit silently with 130 and 143 respectively.
 - Human output may improve, but redirected output must remain plain and useful.
 - Partial data is not zero data: preserve the authoritative count and warning.
 - Additional commands require an explicit design discussion; v1 remains focused
@@ -135,6 +138,7 @@ under the repository's [MIT license](LICENSE).
 ## Releases
 
 Maintainers release with an annotated Semantic Versioning tag such as
-`v0.1.0`. The release workflow validates and tests the repository, then
-GoReleaser publishes artifacts and updates the Homebrew tap. See
+`v0.1.0`. The release workflow validates the tag, builds artifacts once,
+smoke-tests and attests those exact bytes, publishes the verified release, then
+tests and updates the Homebrew tap. See
 [`packaging/homebrew`](packaging/homebrew) for the one-time tap setup.

@@ -1,36 +1,95 @@
 # CXRE
 
-> **Know when your Codex limits reset and reset credits expire.**
+> **See when your Codex limits reset and reset credits expire.**
 
 [![CI](https://github.com/rcmcsweeney/cxre/actions/workflows/ci.yml/badge.svg)](https://github.com/rcmcsweeney/cxre/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/rcmcsweeney/cxre)](https://github.com/rcmcsweeney/cxre/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-CXRE (Codex Resets) is a small, read-only CLI that shows the exact
-expiration time for every available Codex manual reset credit. A compact
-summary above the credit table also shows the five-hour and weekly limits,
-percentage left, exact reset time, and time remaining. CXRE is a single native
-executable and sorts the credits that expire first.
+CXRE (Codex Resets) is a small, read-only command-line tool for checking Codex
+usage limits and reset-credit expiration times. It uses the ChatGPT account
+already signed in through the official Codex CLI.
 
 CXRE is an **unofficial community tool**. It is not affiliated with, endorsed
 by, or maintained by OpenAI.
 
+## Quick start
+
+### 1. Check Codex
+
+You need [Codex CLI](https://developers.openai.com/codex/cli) 0.143.0 or later
+and a ChatGPT sign-in:
+
+```sh
+codex --version
+codex login status
+```
+
+If Codex says you are not signed in, run `codex login` and choose ChatGPT. CXRE
+never asks you to copy or paste a token. API-key-only and Amazon Bedrock
+sessions are not supported in v0.1.x.
+
+### 2. Install CXRE
+
+#### macOS
+
+```sh
+brew install rcmcsweeney/tap/cxre
+```
+
+#### Linux
+
+If you already use Homebrew, run the same one-line command:
+
+```sh
+brew install rcmcsweeney/tap/cxre
+```
+
+Otherwise, follow the short [Linux download steps](#linux-download) below.
+
+#### Windows
+
+Download the files ending in `_Windows_x86_64.zip` and `checksums.txt` from the
+[latest release](https://github.com/rcmcsweeney/cxre/releases/latest). Follow
+[Verify a direct download](#verify-a-direct-download) before opening the ZIP.
+Then, in PowerShell, open your Downloads folder and run:
+
+```powershell
+Expand-Archive .\cxre_*_Windows_x86_64.zip -DestinationPath .\cxre
+.\cxre\cxre.exe --version
+.\cxre\cxre.exe
+```
+
+That is enough to try CXRE. See [Windows download](#windows-download) if you
+want the `cxre` command to work from every folder.
+
+### 3. Run it
+
+On macOS or Linux:
+
+```sh
+cxre
+```
+
+From the Windows quick-start folder:
+
+```powershell
+.\cxre\cxre.exe
+```
+
+Useful alternatives are `--utc`, `--json`, and `--help`, added after either
+command above.
+
+## What you will see
+
 ![CXRE showing usage limits and three reset-credit expirations](docs/cxre-terminal.png)
 
-The screenshot shows real terminal output. Text examples below use fictional
-data.
+CXRE shows the percentage left in the five-hour and weekly windows, the exact
+time each window resets, and each usable unique reset-credit expiration it can
+safely retain, soonest first. The screenshot shows real terminal output; the
+text examples below use fictional data.
 
-## Requirements
-
-- [Codex CLI](https://developers.openai.com/codex/cli) 0.143.0 or newer on
-  `PATH`.
-- A ChatGPT account already signed in through Codex. Run `codex login` if
-  needed.
-
-CXRE deliberately delegates authentication to Codex. API-key-only and Amazon
-Bedrock Codex environments are not supported in v0.1.
-
-## Install
+## Install details
 
 ### Homebrew
 
@@ -38,44 +97,98 @@ Bedrock Codex environments are not supported in v0.1.
 brew install rcmcsweeney/tap/cxre
 ```
 
-The fully qualified command is intentional: on a fresh machine it adds the tap
-and installs CXRE in one step while trusting only this formula. Each stable
-release publishes or updates the formula automatically. If no stable release
-is listed yet, install from source until the first formula is published. Codex
+The fully qualified command adds the tap and installs CXRE in one step. Codex
 itself remains a separate prerequisite.
 
-### GitHub Releases
+### Verify a direct download
 
-Download the archive for your platform from
-[GitHub Releases](https://github.com/rcmcsweeney/cxre/releases), extract it,
-and place `cxre` (or `cxre.exe`) somewhere on your `PATH`.
+CXRE v0.1.x is not code-signed yet, so macOS or Windows may ask you to confirm
+the first launch of a direct download. This is expected. Verify the download,
+then use macOS's normal **Open Anyway** flow or Windows's **More info → Run
+anyway** option. Do not disable your operating system's security checks.
 
-Release archives are available for:
-
-- macOS: Apple Silicon and Intel
-- Linux: AMD64 and ARM64
-- Windows: AMD64
+<details>
+<summary>Checksum and provenance commands</summary>
 
 Each release includes `checksums.txt`, per-archive SBOMs, and GitHub artifact
-provenance. Verify an archive with:
+provenance. Download `checksums.txt` beside the archive before extracting it.
+The provenance commands require [GitHub CLI](https://cli.github.com/). On
+Linux:
 
 ```sh
 sha256sum -c checksums.txt --ignore-missing
-gh attestation verify cxre_0.1.0_Darwin_arm64.tar.gz -R rcmcsweeney/cxre
+gh attestation verify cxre_*_Linux_*.tar.gz -R rcmcsweeney/cxre
 ```
 
-On macOS, use `shasum -a 256` if `sha256sum` is unavailable. Initial CXRE
-releases are not code-signed or notarized, so macOS Gatekeeper or Windows
-SmartScreen may ask for confirmation even when the checksum and provenance are
-valid.
+On macOS:
 
-### From source
+```sh
+shasum -a 256 cxre_*_Darwin_*.tar.gz
+grep 'Darwin' checksums.txt
+gh attestation verify cxre_*_Darwin_*.tar.gz -R rcmcsweeney/cxre
+```
+
+The two checksum values must match. On Windows PowerShell:
+
+```powershell
+$archive = Get-Item .\cxre_*_Windows_x86_64.zip
+Get-FileHash $archive.FullName -Algorithm SHA256
+Select-String -Path .\checksums.txt -Pattern $archive.Name
+gh attestation verify $archive.FullName -R rcmcsweeney/cxre
+```
+
+The two checksum values must match before you continue.
+
+</details>
+
+### Linux download
+
+Most Linux PCs use the file ending in `_Linux_x86_64.tar.gz`; ARM64 computers
+use `_Linux_arm64.tar.gz`. Download the matching archive from the
+[latest release](https://github.com/rcmcsweeney/cxre/releases/latest) together
+with `checksums.txt`. Verify the archive before extracting it:
+
+```sh
+sha256sum -c checksums.txt --ignore-missing
+gh attestation verify cxre_*_Linux_*.tar.gz -R rcmcsweeney/cxre
+mkdir -p cxre-download
+tar -xzf cxre_*_Linux_*.tar.gz -C cxre-download
+mkdir -p "$HOME/.local/bin"
+install -m 0755 cxre-download/cxre "$HOME/.local/bin/cxre"
+export PATH="$HOME/.local/bin:$PATH"
+cxre --version
+```
+
+The `export` affects the current shell. If `cxre` is not found after opening a
+new terminal, add `$HOME/.local/bin` to the PATH setting in your shell profile.
+
+### Windows download
+
+The PowerShell commands in [Quick start](#quick-start) run CXRE directly from
+the extracted folder. To make `cxre` available in new PowerShell windows:
+
+```powershell
+New-Item -ItemType Directory -Force "$HOME\bin" | Out-Null
+Copy-Item .\cxre\cxre.exe "$HOME\bin\cxre.exe"
+$path = [Environment]::GetEnvironmentVariable("Path", "User")
+if (($path -split ";") -notcontains "$HOME\bin") {
+  [Environment]::SetEnvironmentVariable("Path", "$path;$HOME\bin", "User")
+}
+```
+
+Close and reopen PowerShell, then run `cxre --version`.
+
+### From source (advanced)
 
 With Go 1.25 or newer:
 
 ```sh
 go install github.com/rcmcsweeney/cxre/cmd/cxre@latest
+cxre --version
 ```
+
+Tagged source installs report the released CXRE version. Builds whose embedded
+Go module version is `(devel)` report `cxre dev`.
 
 ### Scoop
 
@@ -99,6 +212,7 @@ first release more complicated.
 
 ### Terminal output
 
+<!-- BEGIN README TERMINAL EXAMPLE -->
 ```text
 CXRE — Codex Resets
 
@@ -110,12 +224,13 @@ Weekly   39%  Sat 18 Jul 2026 12:00:00 PM NZST  5d 22h
 
 Available reset credits: 3
 
-Expires                           Remaining
-------------------------------------------------
-Sun 12 Jul 2026 8:42:17 PM NZST  4h 12m
-Mon 20 Jul 2026 9:00:00 AM NZST  7d 16h
-Sun 02 Aug 2026 4:03:51 PM NZST  21d 23h
+Expires                          Remaining
+------------------------------------------
+Sun 12 Jul 2026 8:42:17 PM NZST  7h 27m
+Mon 20 Jul 2026 9:00:00 AM NZST  7d 19h
+Sun 02 Aug 2026 4:03:51 PM NZST  21d 2h
 ```
+<!-- END README TERMINAL EXAMPLE -->
 
 Times use the operating system's local timezone unless `--utc` is set. Limit
 percentages show the amount left, matching Codex's presentation. Credits are
@@ -141,6 +256,7 @@ changes RFC 3339 strings and the reported timezone; Unix values are unchanged.
 In local mode the `timezone` field uses the operating system's IANA zone name
 when available, with the active timezone abbreviation as a portable fallback.
 
+<!-- BEGIN README JSON EXAMPLE -->
 ```json
 {
   "schema_version": 1,
@@ -175,11 +291,26 @@ when available, with the active timezone abbreviation as a portable fallback.
       "remaining_seconds": 26848,
       "expired": false,
       "does_not_expire": false
+    },
+    {
+      "expires_at": "2026-07-20T09:00:00+12:00",
+      "expires_at_unix": 1784494800,
+      "remaining_seconds": 675911,
+      "expired": false,
+      "does_not_expire": false
+    },
+    {
+      "expires_at": "2026-08-02T16:03:51+12:00",
+      "expires_at_unix": 1785643431,
+      "remaining_seconds": 1824542,
+      "expired": false,
+      "does_not_expire": false
     }
   ],
   "warnings": []
 }
 ```
+<!-- END README JSON EXAMPLE -->
 
 `limits.five_hour` and `limits.weekly` are `null` when Codex does not provide a
 recognized window. If a percentage is available without a reset timestamp, the
@@ -205,8 +336,10 @@ Codex can report an authoritative available count while returning fewer
 individual expiry rows. CXRE does not invent the missing timestamps. It shows
 the known rows, emits a warning, sets `complete` to `false`, and reports the
 difference in `missing_count`. This is a successful query and exits 0. An
-explicit count of zero is also successful; a missing reset-credit summary is
-an operational error.
+explicit count of zero is also successful. If Codex explicitly reports that
+reset-credit information is unavailable for the account, CXRE exits 1 with the
+actionable `reset_credits_unavailable` error instead of guessing that the count
+is zero.
 
 ## Errors and exit codes
 
@@ -215,6 +348,8 @@ an operational error.
 | `0` | Successful query, including explicitly empty or partial data |
 | `1` | Authentication, Codex, timeout, network, or protocol failure |
 | `2` | Invalid flags or positional arguments |
+| `130` | Interrupted with Ctrl-C; no error is printed |
+| `143` | Terminated with SIGTERM on Unix; no error is printed |
 
 Human errors are short and actionable. With `--json`, stdout stays empty and
 stderr contains one sanitized object:
@@ -229,10 +364,11 @@ stderr contains one sanitized object:
 }
 ```
 
-Stable error codes are `usage`, `codex_not_found`, `auth_missing`,
-`unsupported_auth`, `codex_too_old`, `timeout`, `network`, `protocol`, and
-`output`. Backend response bodies, child-process stderr, and credentials are
-never copied into user-facing errors.
+Stable error codes are `usage`, `codex_not_found`,
+`codex_invalid_executable`, `auth_missing`, `unsupported_auth`,
+`codex_too_old`, `reset_credits_unavailable`, `timeout`, `network`, `protocol`,
+and `output`. Backend response bodies, child-process stderr, configured paths,
+and credentials are never copied into user-facing errors.
 
 ### Troubleshooting
 
@@ -240,6 +376,11 @@ never copied into user-facing errors.
 
 Confirm `codex --version` works in the same shell. For an unusual installation,
 set `CXRE_CODEX` to the Codex executable path.
+
+**CXRE says the selected Codex executable is invalid**
+
+Correct or unset `CXRE_CODEX`, or reinstall Codex, then run `cxre` again. CXRE
+never prints the configured path in its error output.
 
 **CXRE cannot find authentication**
 
@@ -256,11 +397,20 @@ Update Codex to 0.143.0 or newer, then retry. CXRE also feature-detects reset
 expiry details because the protocol can evolve independently of version
 numbers.
 
+**Reset-credit information is unavailable**
+
+This is different from having zero credits. Try again later. If the message
+continues, reset credits may not be available for your ChatGPT plan or
+workspace; the Codex app server deliberately returned no reset-credit summary.
+
 **The result is incomplete**
 
-CXRE displayed every expiry row Codex provided. Update Codex and retry later;
-the reported count remains authoritative, and the warning identifies how many
-timestamps are unavailable.
+CXRE displayed every usable unique expiry row it could safely retain. The
+reported count remains authoritative. A `partial_reset_credit_details` warning
+quantifies missing expiration details; an `inconsistent_reset_credit_details`
+warning identifies duplicate, conflicting, unidentifiable, or otherwise
+unreliable rows and may not include a numeric count. Update Codex and retry
+later.
 
 ## Privacy and security
 
@@ -313,9 +463,10 @@ and build metadata. See [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a
 change.
 
 Releases follow Semantic Versioning. A `vX.Y.Z` tag runs tests, builds static
-archives, generates checksums and SBOMs, publishes a GitHub Release, records
-provenance, updates `rcmcsweeney/homebrew-tap`, and runs each archive's help and
-version paths on a matching native hosted runner.
+archives once, verifies each archive on a matching native hosted runner, and
+attests those exact bytes. Only then does the workflow publish the GitHub
+Release, test the generated Homebrew formula, and update
+`rcmcsweeney/homebrew-tap`.
 
 ## Scope
 

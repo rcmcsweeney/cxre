@@ -75,19 +75,21 @@ func Fetch(ctx context.Context, clientVersion string) (Result, error) {
 		return Result{}, err
 	}
 	return fetch(ctx, fetchOptions{
-		executable:    executable,
-		clientVersion: clientVersion,
-		timeout:       defaultTimeout,
+		executable:         executable.path,
+		explicitExecutable: executable.explicit,
+		clientVersion:      clientVersion,
+		timeout:            defaultTimeout,
 	})
 }
 
 type fetchOptions struct {
-	executable    string
-	clientVersion string
-	timeout       time.Duration
+	executable         string
+	explicitExecutable bool
+	clientVersion      string
+	timeout            time.Duration
 }
 
-func fetch(parent context.Context, options fetchOptions) (Result, error) {
+func fetch(parent context.Context, options fetchOptions) (result Result, resultErr error) {
 	timeout := options.timeout
 	if timeout <= 0 {
 		timeout = defaultTimeout
@@ -127,18 +129,26 @@ func fetch(parent context.Context, options fetchOptions) (Result, error) {
 		if ctx.Err() != nil {
 			return Result{}, failure(CodeTimeout, ctx.Err())
 		}
+		if options.explicitExecutable {
+			return Result{}, failure(CodeCodexInvalidExecutable, err)
+		}
 		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
 			return Result{}, failure(CodeCodexNotFound, err)
 		}
 		return Result{}, failure(CodeProtocol, err)
 	}
-	defer shutdownProcess(ctx, cmd, stdin, stderrDone)
+	defer func() {
+		shutdownProcess(ctx, cmd, stdin, stderrDone)
+		var transportFailure *transportIOError
+		if errors.As(resultErr, &transportFailure) {
+			resultErr = classifyTransportFailure(transportFailure, captured.String())
+		}
+	}()
 
 	transport := jsonlTransport{
 		ctx:     ctx,
 		encoder: json.NewEncoder(stdin),
 		scanner: bufio.NewScanner(stdout),
-		stderr:  &captured,
 	}
 	transport.scanner.Buffer(make([]byte, 4096), maxMessageBytes)
 
@@ -168,7 +178,7 @@ func fetch(parent context.Context, options fetchOptions) (Result, error) {
 	if err := transport.request(2, "account/rateLimits/read", nil, &rateLimits); err != nil {
 		return Result{}, err
 	}
-	result, err := parseRateLimits(rateLimits)
+	result, err = parseRateLimits(rateLimits)
 	if err != nil {
 		return Result{}, err
 	}
@@ -214,26 +224,35 @@ func shutdownProcess(
 	<-stderrDone
 }
 
-func resolveExecutable() (string, error) {
+type resolvedExecutable struct {
+	path     string
+	explicit bool
+}
+
+func resolveExecutable() (resolvedExecutable, error) {
 	return resolvePath(os.LookupEnv, exec.LookPath)
 }
 
 func resolvePath(
 	lookupEnv func(string) (string, bool),
 	lookPath func(string) (string, error),
-) (string, error) {
+) (resolvedExecutable, error) {
 	if configured, ok := lookupEnv("CXRE_CODEX"); ok {
 		if configured == "" {
-			return "", failure(CodeCodexNotFound, exec.ErrNotFound)
+			return resolvedExecutable{}, failure(CodeCodexInvalidExecutable, exec.ErrNotFound)
 		}
-		return configured, nil
+		path, err := lookPath(configured)
+		if err != nil {
+			return resolvedExecutable{}, failure(CodeCodexInvalidExecutable, err)
+		}
+		return resolvedExecutable{path: path, explicit: true}, nil
 	}
 
 	path, err := lookPath("codex")
 	if err != nil {
-		return "", failure(CodeCodexNotFound, err)
+		return resolvedExecutable{}, failure(CodeCodexNotFound, err)
 	}
-	return path, nil
+	return resolvedExecutable{path: path}, nil
 }
 
 type initializeParams struct {
@@ -302,7 +321,7 @@ func parseRateLimits(raw json.RawMessage) (Result, error) {
 		return Result{}, failure(CodeCodexTooOld, nil)
 	}
 	if bytes.Equal(bytes.TrimSpace(envelope.ResetCredits), []byte("null")) {
-		return Result{}, failure(CodeProtocol, nil)
+		return Result{}, failure(CodeResetCreditsUnavailable, nil)
 	}
 
 	var reset rawResetCredits
@@ -490,7 +509,6 @@ type jsonlTransport struct {
 	ctx     context.Context
 	encoder *json.Encoder
 	scanner *bufio.Scanner
-	stderr  *limitedCapture
 }
 
 type wireRequest struct {
@@ -577,24 +595,32 @@ func (t *jsonlTransport) readResponse(expectedID int64) (json.RawMessage, error)
 	return nil, t.ioFailure(t.scanner.Err())
 }
 
-func (t *jsonlTransport) ioFailure(cause error) error {
-	if t.ctx.Err() != nil {
-		return failure(CodeTimeout, t.ctx.Err())
-	}
-	text := ""
-	if t.stderr != nil {
-		text = t.stderr.String()
+// transportIOError is kept private until fetch has reaped the child and joined
+// the stderr drain. It deliberately retains no raw protocol or process text.
+type transportIOError struct {
+	timedOut bool
+}
+
+func (*transportIOError) Error() string { return "Codex transport failed" }
+
+func (t *jsonlTransport) ioFailure(_ error) error {
+	return &transportIOError{timedOut: t.ctx.Err() != nil}
+}
+
+func classifyTransportFailure(problem *transportIOError, text string) error {
+	if problem.timedOut {
+		return failure(CodeTimeout, nil)
 	}
 	if looksLikeTooOldFailure(text) {
-		return failure(CodeCodexTooOld, cause)
+		return failure(CodeCodexTooOld, nil)
 	}
 	if looksLikeTimeout(text) {
-		return failure(CodeTimeout, cause)
+		return failure(CodeTimeout, nil)
 	}
 	if looksLikeNetworkFailure(text) {
-		return failure(CodeNetwork, cause)
+		return failure(CodeNetwork, nil)
 	}
-	return failure(CodeProtocol, cause)
+	return failure(CodeProtocol, nil)
 }
 
 func classifyRPCError(rpc *rpcError) error {

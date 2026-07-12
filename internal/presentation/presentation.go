@@ -30,8 +30,11 @@ type Options struct {
 	Timezone string
 	Now      time.Time
 	Color    bool
-	Unicode  bool
-	Width    int
+	// WarningColor is evaluated for warningOut independently because stderr may
+	// be redirected while normal output remains attached to a terminal.
+	WarningColor bool
+	Unicode      bool
+	Width        int
 }
 
 // Report is the complete presentation input. Keeping the domain outputs
@@ -107,7 +110,7 @@ func RenderHuman(out, warningOut io.Writer, report Report, options Options) erro
 		if options.Unicode {
 			prefix = "! "
 		}
-		prefix = style(prefix, ansiYellow, options.Color)
+		prefix = style(prefix, ansiYellow, options.WarningColor)
 		if _, err := fmt.Fprintf(warningOut, "%s%s\n", prefix, warning.Message); err != nil {
 			return err
 		}

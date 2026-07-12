@@ -6,34 +6,77 @@ on:
       - "v*.*.*"
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
-  artifact-metadata: write
+  contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  # All stable tags share one publication target. Serialize the entire pipeline
+  # so two versions cannot race and overwrite the Homebrew tap out of order.
+  group: cxre-stable-release
   cancel-in-progress: false
 
 env:
   GO_VERSION: 1.26.x
 
 jobs:
-  release:
-    name: Build and publish
+  validate:
+    name: Validate release tag
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.validate.outputs.version }}
     steps:
       - name: Check out source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
-      - name: Validate stable semantic version tag
+      - name: Validate tag, ancestry, and changelog
+        id: validate
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           if [[ ! "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "Expected a stable vMAJOR.MINOR.PATCH tag, got $GITHUB_REF_NAME" >&2
             exit 1
           fi
+          if [[ "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME")" != tag ]]; then
+            echo "Release tags must be annotated." >&2
+            exit 1
+          fi
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Release commit must be an ancestor of origin/main." >&2
+            exit 1
+          fi
+          version="${GITHUB_REF_NAME#v}"
+          if ! grep -Fq "## [$version] - " CHANGELOG.md; then
+            echo "CHANGELOG.md has no dated $version release section." >&2
+            exit 1
+          fi
+          if release_json="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --json isDraft,name,tagName 2>/dev/null)"; then
+            if ! jq -e --arg tag "$GITHUB_REF_NAME" --arg name "CXRE $GITHUB_REF_NAME" \
+              '.isDraft == true and .tagName == $tag and .name == $name' <<<"$release_json" >/dev/null; then
+              echo "A conflicting GitHub release already exists for $GITHUB_REF_NAME." >&2
+              exit 1
+            fi
+            echo "A matching draft exists and will be replaced safely."
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build immutable artifacts
+    needs: validate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
       - name: Set up Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
@@ -43,28 +86,51 @@ jobs:
         run: make ci
       - name: Install Syft
         run: go install github.com/anchore/syft/cmd/syft@v1.44.0
-      - name: Publish GitHub Release and Homebrew formula
+      - name: Build without publishing
         uses: goreleaser/goreleaser-action@4c6ab561adb47e50c45ef534e2155934e91c40c1 # v7.2.0
         with:
           distribution: goreleaser
           version: v2.17.0
-          args: release --clean
+          args: release --skip=publish --clean
+      - name: Extract curated release notes
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
-      - name: Attest release archives and SBOMs
-        uses: actions/attest@c32b4b8b198b65d0bd9d63490e847ff7b53989d4 # v4.0.0
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          awk -v header="## [$VERSION]" '
+            index($0, header) == 1 { printing = 1 }
+            printing && /^## \[/ && index($0, header) != 1 { exit }
+            printing { print }
+          ' CHANGELOG.md > dist/release-notes.md
+          test -s dist/release-notes.md
+      - name: Validate artifact set
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find dist -maxdepth 1 -type f -name 'cxre_*.tar.gz' | wc -l | tr -d ' ')" = 4
+          test "$(find dist -maxdepth 1 -type f -name 'cxre_*.zip' | wc -l | tr -d ' ')" = 1
+          test "$(find dist -maxdepth 1 -type f -name 'cxre_*.sbom.json' | wc -l | tr -d ' ')" = 5
+          test -s dist/checksums.txt
+          test -s dist/homebrew/Formula/cxre.rb
+          for artifact in dist/cxre_*.tar.gz dist/cxre_*.zip dist/cxre_*.sbom.json; do
+            grep -Fq "  $(basename "$artifact")" dist/checksums.txt
+          done
+      - name: Upload immutable build output
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          subject-checksums: dist/checksums.txt
-      - name: Attest checksum manifest
-        uses: actions/attest@c32b4b8b198b65d0bd9d63490e847ff7b53989d4 # v4.0.0
-        with:
-          subject-path: dist/checksums.txt
+          name: cxre-release-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
 
   smoke-archives:
     name: Smoke archive (${{ matrix.name }})
-    needs: release
+    needs:
+      - validate
+      - build
     permissions:
+      actions: read
       contents: read
     strategy:
       fail-fast: false
@@ -102,26 +168,262 @@ jobs:
             binary: cxre.exe
     runs-on: ${{ matrix.runner }}
     steps:
-      - name: Download, extract, and run release archive
+      - name: Download immutable build output
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cxre-release-dist
+          path: dist
+      - name: Verify, extract, and smoke archive
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.validate.outputs.version }}
         run: |
-          $version = $env:GITHUB_REF_NAME.Substring(1)
-          $archive = "cxre_${version}_${{ matrix.platform }}_${{ matrix.arch }}.${{ matrix.suffix }}"
-          gh release download $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY --pattern $archive
-          if ($LASTEXITCODE -ne 0) { throw "Unable to download $archive" }
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+          $archive = "cxre_${env:VERSION}_${{ matrix.platform }}_${{ matrix.arch }}.${{ matrix.suffix }}"
+          $archivePath = Join-Path (Resolve-Path dist) $archive
+          $checksumLines = @(Get-Content dist/checksums.txt | Where-Object { $_.EndsWith("  $archive") })
+          if ($checksumLines.Count -ne 1) { throw "Expected one checksum for $archive" }
+          $expected = ($checksumLines[0] -split '\s+')[0].ToLowerInvariant()
+          $actual = (Get-FileHash -Algorithm SHA256 $archivePath).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Checksum mismatch for $archive" }
 
           New-Item -ItemType Directory -Path extracted | Out-Null
           if ($archive.EndsWith(".zip")) {
-            Expand-Archive -Path $archive -DestinationPath extracted
+            Expand-Archive -Path $archivePath -DestinationPath extracted
           } else {
-            tar -xzf $archive -C extracted
+            tar -xzf $archivePath -C extracted
             if ($LASTEXITCODE -ne 0) { throw "Unable to extract $archive" }
           }
 
+          foreach ($required in @(
+            "LICENSE", "README.md", "CHANGELOG.md", "SECURITY.md", "CONTRIBUTING.md",
+            "docs/cxre-terminal.png", "packaging/homebrew/README.md",
+            "packaging/scoop/README.md", "packaging/scoop/cxre.json.tmpl"
+          )) {
+            if (-not (Test-Path (Join-Path extracted $required))) {
+              throw "$archive is missing $required"
+            }
+          }
+
           $binary = Join-Path (Resolve-Path extracted) "${{ matrix.binary }}"
-          & $binary --help
-          if ($LASTEXITCODE -ne 0) { throw "$binary --help failed" }
-          & $binary --version
+          $versionText = (& $binary --version | Out-String).Trim()
           if ($LASTEXITCODE -ne 0) { throw "$binary --version failed" }
+          if (-not $versionText.Contains($env:VERSION) -or -not $versionText.Contains("${{ github.sha }}")) {
+            throw "Unexpected version output: $versionText"
+          }
+          & $binary --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "$binary --help failed" }
+
+          & $binary --definitely-invalid 1> $null 2> $null
+          if ($LASTEXITCODE -ne 2) { throw "Invalid flag did not exit 2" }
+
+          $env:CXRE_CODEX = Join-Path $PWD "missing-codex"
+          & $binary --json 1> smoke-stdout.txt 2> smoke-stderr.txt
+          $failureExit = $LASTEXITCODE
+          Remove-Item Env:CXRE_CODEX
+          if ($failureExit -ne 1) { throw "Missing CXRE_CODEX did not exit 1" }
+          if ((Get-Item smoke-stdout.txt).Length -ne 0) { throw "JSON failure wrote to stdout" }
+          $failureText = Get-Content -Raw smoke-stderr.txt
+          if ($failureText.Contains("missing-codex")) { throw "JSON failure leaked the configured path" }
+          $failure = $failureText | ConvertFrom-Json
+          if ($failure.error.code -ne "codex_invalid_executable") {
+            throw "Unexpected JSON error code: $($failure.error.code)"
+          }
+
+  attest:
+    name: Attest tested artifacts
+    needs:
+      - build
+      - smoke-archives
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      artifact-metadata: write
+      attestations: write
+      contents: read
+      id-token: write
+    steps:
+      - name: Download immutable build output
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cxre-release-dist
+          path: dist
+      - name: Re-verify every checksum
+        run: cd dist && sha256sum -c checksums.txt
+      - name: Attest release archives and SBOMs
+        uses: actions/attest@c32b4b8b198b65d0bd9d63490e847ff7b53989d4 # v4.0.0
+        with:
+          subject-checksums: dist/checksums.txt
+      - name: Attest checksum manifest
+        uses: actions/attest@c32b4b8b198b65d0bd9d63490e847ff7b53989d4 # v4.0.0
+        with:
+          subject-path: dist/checksums.txt
+
+  publish-release:
+    name: Publish verified GitHub release
+    needs:
+      - validate
+      - build
+      - smoke-archives
+      - attest
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download immutable build output
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cxre-release-dist
+          path: dist
+      - name: Create, verify, and publish draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(dist/cxre_*.tar.gz dist/cxre_*.zip dist/cxre_*.sbom.json dist/checksums.txt)
+          test "${#assets[@]}" = 11
+          cleanup_enabled=false
+          cleanup_draft() {
+            status=$?
+            trap - EXIT
+            if [[ "$status" -ne 0 && "$cleanup_enabled" == true ]]; then
+              if cleanup_json="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+                --json isDraft,name,tagName 2>/dev/null)" && \
+                jq -e --arg tag "$GITHUB_REF_NAME" --arg name "CXRE $GITHUB_REF_NAME" \
+                  '.isDraft == true and .tagName == $tag and .name == $name' \
+                  <<<"$cleanup_json" >/dev/null; then
+                gh release delete "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --yes || true
+              fi
+            fi
+            exit "$status"
+          }
+          trap cleanup_draft EXIT
+
+          if existing_json="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --json isDraft,name,tagName 2>/dev/null)"; then
+            jq -e --arg tag "$GITHUB_REF_NAME" --arg name "CXRE $GITHUB_REF_NAME" \
+              '.isDraft == true and .tagName == $tag and .name == $name' \
+              <<<"$existing_json" >/dev/null
+            gh release delete "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --yes
+          fi
+          cleanup_enabled=true
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --verify-tag \
+            --title "CXRE $GITHUB_REF_NAME" \
+            --notes-file dist/release-notes.md
+          gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --repo "$GITHUB_REPOSITORY"
+
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --json assets,isDraft,tagName > release.json
+          jq -e --arg tag "$GITHUB_REF_NAME" \
+            '.tagName == $tag and .isDraft == true and (.assets | length) == 11' release.json
+
+          while read -r hash name; do
+            digest="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest' release.json)"
+            test "$digest" = "sha256:$hash"
+          done < dist/checksums.txt
+          manifest_hash="$(sha256sum dist/checksums.txt | cut -d ' ' -f 1)"
+          manifest_digest="$(jq -r '.assets[] | select(.name == "checksums.txt") | .digest' release.json)"
+          test "$manifest_digest" = "sha256:$manifest_hash"
+
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
+          trap - EXIT
+
+  homebrew-test:
+    name: Test Homebrew formula (${{ matrix.name }})
+    needs:
+      - build
+      - publish-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            runner: macos-15
+          - name: Linux
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      actions: read
+      contents: read
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      HOMEBREW_NO_INSTALL_CLEANUP: 1
+      HOMEBREW_NO_INSTALL_FROM_API: 1
+    steps:
+      - name: Add Linuxbrew to PATH
+        if: runner.os == 'Linux'
+        shell: bash
+        run: echo "/home/linuxbrew/.linuxbrew/bin" >> "$GITHUB_PATH"
+      - name: Download immutable build output
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cxre-release-dist
+          path: dist
+      - name: Audit, install, and test formula
+        shell: bash
+        run: |
+          set -euo pipefail
+          tap_name="cxre/release-test"
+          brew tap-new --no-git "$tap_name"
+          tap_dir="$(brew --repository "$tap_name")"
+          install -m 0644 dist/homebrew/Formula/cxre.rb "$tap_dir/Formula/cxre.rb"
+          formula="$tap_name/cxre"
+          brew audit --strict --formula "$formula"
+          brew install --formula "$formula"
+          brew test "$formula"
+          cxre --version | grep -F "${GITHUB_REF_NAME#v}"
+
+  publish-tap:
+    name: Publish tested Homebrew formula
+    needs:
+      - build
+      - homebrew-test
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Download immutable build output
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cxre-release-dist
+          path: dist
+      - name: Check out Homebrew tap
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: rcmcsweeney/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          path: tap
+          fetch-depth: 0
+      - name: Publish formula if changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          new_version="${GITHUB_REF_NAME#v}"
+          current_version="$(sed -n 's/^[[:space:]]*version "\([^"]*\)"/\1/p' tap/Formula/cxre.rb | head -n 1)"
+          if [[ -n "$current_version" && "$current_version" != "$new_version" ]]; then
+            oldest="$(printf '%s\n%s\n' "$current_version" "$new_version" | sort -V | head -n 1)"
+            if [[ "$oldest" == "$new_version" ]]; then
+              echo "Refusing to replace Homebrew $current_version with older $new_version." >&2
+              exit 1
+            fi
+          fi
+          install -m 0644 dist/homebrew/Formula/cxre.rb tap/Formula/cxre.rb
+          git -C tap diff --check
+          git -C tap add Formula/cxre.rb
+          if git -C tap diff --cached --quiet; then
+            echo "Homebrew formula is already current."
+            exit 0
+          fi
+          git -C tap config user.name cxre-release-bot
+          git -C tap config user.email actions@users.noreply.github.com
+          git -C tap commit -m "brew: update cxre to $GITHUB_REF_NAME"
+          git -C tap push origin HEAD:main

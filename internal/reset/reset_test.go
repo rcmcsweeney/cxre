@@ -225,6 +225,170 @@ func TestEqualExpirationsAndNonExpiringCreditsUseIDTieBreak(t *testing.T) {
 	}
 }
 
+func TestBuildRepeatedNonEmptyIDRetainsFirstAvailableAndWarns(t *testing.T) {
+	now := time.Date(2026, time.July, 12, 1, 0, 0, 0, time.UTC)
+	first := now.Add(time.Hour)
+	second := now.Add(2 * time.Hour)
+	tests := []struct {
+		name        string
+		credits     []Credit
+		wantExpires *time.Time
+	}{
+		{
+			name: "identical available rows",
+			credits: []Credit{
+				{ID: "same", Status: statusAvailable, ExpiresAt: &first},
+				{ID: "same", Status: statusAvailable, ExpiresAt: &first},
+			},
+			wantExpires: &first,
+		},
+		{
+			name: "conflicting available rows",
+			credits: []Credit{
+				{ID: "same", Status: statusAvailable, ExpiresAt: &second},
+				{ID: "same", Status: statusAvailable, ExpiresAt: &first},
+			},
+			wantExpires: &second,
+		},
+		{
+			name: "available before redeemed",
+			credits: []Credit{
+				{ID: "same", Status: statusAvailable, ExpiresAt: &first},
+				{ID: "same", Status: statusRedeemed, ExpiresAt: &second},
+			},
+			wantExpires: &first,
+		},
+		{
+			name: "available after redeemed",
+			credits: []Credit{
+				{ID: "same", Status: statusRedeemed, ExpiresAt: &first},
+				{ID: "same", Status: statusAvailable, ExpiresAt: &second},
+			},
+			wantExpires: &second,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := Build(Snapshot{
+				AvailableCount:  1,
+				DetailsProvided: true,
+				Credits:         test.credits,
+			}, now)
+
+			if got.Complete || got.DetailedCount != 1 || got.MissingCount != 0 || len(got.Credits) != 1 {
+				t.Fatalf("output = %#v", got)
+			}
+			if got.Credits[0].ID != "same" || !got.Credits[0].ExpiresAt.Equal(*test.wantExpires) {
+				t.Fatalf("retained credit = %#v, want expiry %v", got.Credits[0], test.wantExpires)
+			}
+			assertWarningCodes(t, got.Warnings, WarningCodeInconsistentDetails)
+		})
+	}
+}
+
+func TestBuildRepeatedNonEmptyIDCanLeaveAuthoritativeDetailMissing(t *testing.T) {
+	now := time.Date(2026, time.July, 12, 1, 0, 0, 0, time.UTC)
+	expires := now.Add(time.Hour)
+	got := Build(Snapshot{
+		AvailableCount:  2,
+		DetailsProvided: true,
+		Credits: []Credit{
+			{ID: "same", Status: statusAvailable, ExpiresAt: &expires},
+			{ID: "same", Status: statusAvailable, ExpiresAt: &expires},
+		},
+	}, now)
+
+	if got.Complete || got.DetailedCount != 1 || got.MissingCount != 1 || len(got.Credits) != 1 {
+		t.Fatalf("output = %#v", got)
+	}
+	assertWarningCodes(t, got.Warnings, WarningCodePartialDetails, WarningCodeInconsistentDetails)
+}
+
+func TestBuildRepeatedNonAvailableIDIsInconsistent(t *testing.T) {
+	got := Build(Snapshot{
+		AvailableCount:  0,
+		DetailsProvided: true,
+		Credits: []Credit{
+			{ID: "same", Status: statusRedeeming},
+			{ID: "same", Status: statusRedeemed},
+		},
+	}, time.Now())
+
+	if got.Complete || got.DetailedCount != 0 || got.MissingCount != 0 || len(got.Credits) != 0 {
+		t.Fatalf("output = %#v", got)
+	}
+	assertWarningCodes(t, got.Warnings, WarningCodeInconsistentDetails)
+}
+
+func TestBuildEmptyAvailableIDsRemainDistinctAndInconsistent(t *testing.T) {
+	now := time.Date(2026, time.July, 12, 1, 0, 0, 0, time.UTC)
+	soon := now.Add(time.Hour)
+	later := now.Add(2 * time.Hour)
+	got := Build(Snapshot{
+		AvailableCount:  3,
+		DetailsProvided: true,
+		Credits: []Credit{
+			{Status: statusAvailable, ExpiresAt: &later},
+			{Status: statusAvailable},
+			{Status: statusAvailable, ExpiresAt: &soon},
+		},
+	}, now)
+
+	if got.Complete || got.DetailedCount != 3 || got.MissingCount != 0 || len(got.Credits) != 3 {
+		t.Fatalf("output = %#v", got)
+	}
+	if !got.Credits[0].ExpiresAt.Equal(soon) || !got.Credits[1].ExpiresAt.Equal(later) || !got.Credits[2].DoesNotExpire {
+		t.Fatalf("credits = %#v", got.Credits)
+	}
+	assertWarningCodes(t, got.Warnings, WarningCodeInconsistentDetails)
+}
+
+func TestBuildEmptyKnownUnavailableIDIsInconsistent(t *testing.T) {
+	got := Build(Snapshot{
+		AvailableCount:  0,
+		DetailsProvided: true,
+		Credits:         []Credit{{Status: statusRedeemed}},
+	}, time.Now())
+
+	if got.Complete || got.DetailedCount != 0 || got.MissingCount != 0 {
+		t.Fatalf("output = %#v", got)
+	}
+	assertWarningCodes(t, got.Warnings, WarningCodeInconsistentDetails)
+}
+
+func TestBuildRepeatedIDWithUnknownThenAvailableRetainsUsefulRow(t *testing.T) {
+	now := time.Date(2026, time.July, 12, 1, 0, 0, 0, time.UTC)
+	expires := now.Add(time.Hour)
+	got := Build(Snapshot{
+		AvailableCount:  1,
+		DetailsProvided: true,
+		Credits: []Credit{
+			{ID: "same", Status: statusUnknown},
+			{ID: "same", Status: statusAvailable, ExpiresAt: &expires},
+		},
+	}, now)
+
+	if got.Complete || got.DetailedCount != 1 || got.MissingCount != 0 || len(got.Credits) != 1 {
+		t.Fatalf("output = %#v", got)
+	}
+	if got.Credits[0].ID != "same" || !got.Credits[0].ExpiresAt.Equal(expires) {
+		t.Fatalf("retained credit = %#v", got.Credits[0])
+	}
+	assertWarningCodes(t, got.Warnings, WarningCodeInconsistentDetails)
+}
+
+func assertWarningCodes(t *testing.T, warnings []Warning, want ...string) {
+	t.Helper()
+	got := make([]string, len(warnings))
+	for i, warning := range warnings {
+		got[i] = warning.Code
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("warning codes = %v, want %v; warnings = %#v", got, want, warnings)
+	}
+}
+
 func expirationIDs(credits []Expiration) []string {
 	ids := make([]string, len(credits))
 	for i, credit := range credits {
