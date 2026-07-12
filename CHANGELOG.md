@@ -7,6 +7,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- Clear the expected nonzero probe status after native release smoke assertions,
+  and support recovering an unpublished immutable tag from protected `main`
+  without moving or replacing the tag.
+
 ## [0.1.1] - 2026-07-12
 
 ### Fixed
