@@ -61,12 +61,16 @@ func TestUsageErrorHonorsJSONRegardlessOfOrder(t *testing.T) {
 func TestJSONSuccessUTC(t *testing.T) {
 	now := time.Date(2026, time.July, 12, 1, 0, 0, 0, time.UTC)
 	expires := now.Add(4*time.Hour + 12*time.Minute)
+	fiveHourReset := now.Add(2*time.Hour + 30*time.Minute)
+	weeklyReset := now.Add(5*24*time.Hour + 19*time.Hour)
 	deps := testDependencies()
 	deps.now = func() time.Time { return now }
 	deps.fetch = func(context.Context, string) (codex.Result, error) {
 		return codex.Result{
 			AvailableCount:  1,
 			DetailsProvided: true,
+			FiveHour:        &codex.UsageWindow{UsedPercent: 37, ResetsAt: &fiveHourReset},
+			Weekly:          &codex.UsageWindow{UsedPercent: 61, ResetsAt: &weeklyReset},
 			Credits: []codex.Credit{{
 				ID:                "opaque-secret",
 				Status:            "available",
@@ -81,13 +85,53 @@ func TestJSONSuccessUTC(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
 	}
-	for _, expected := range []string{`"schema_version": 1`, `"timezone": "UTC"`, `"remaining_seconds": 15120`} {
+	for _, expected := range []string{
+		`"schema_version": 1`,
+		`"timezone": "UTC"`,
+		`"five_hour": {`,
+		`"used_percent": 37`,
+		`"weekly": {`,
+		`"remaining_seconds": 15120`,
+	} {
 		if !strings.Contains(stdout.String(), expected) {
 			t.Errorf("JSON missing %s:\n%s", expected, stdout.String())
 		}
 	}
 	if strings.Contains(stdout.String(), "opaque-secret") || stderr.Len() != 0 {
 		t.Fatalf("leak or stderr: stdout=%s stderr=%s", stdout.String(), stderr.String())
+	}
+}
+
+func TestJSONKeepsLimitPercentageWithoutResetTime(t *testing.T) {
+	deps := testDependencies()
+	deps.fetch = func(context.Context, string) (codex.Result, error) {
+		return codex.Result{
+			AvailableCount:  0,
+			DetailsProvided: true,
+			FiveHour:        &codex.UsageWindow{UsedPercent: 37},
+			Credits:         []codex.Credit{},
+		}, nil
+	}
+
+	var stdout, stderr strings.Builder
+	code := run(context.Background(), []string{"--json"}, &stdout, &stderr, deps)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	for _, expected := range []string{
+		`"five_hour": {`,
+		`"used_percent": 37`,
+		`"remaining_percent": 63`,
+		`"resets_at": null`,
+		`"remaining_seconds": null`,
+		`"reset_due": null`,
+	} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Errorf("JSON missing %s:\n%s", expected, stdout.String())
+		}
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("unexpected stderr: %s", stderr.String())
 	}
 }
 

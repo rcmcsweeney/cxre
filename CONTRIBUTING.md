@@ -42,7 +42,7 @@ responsibilities separate:
 
 - CLI parsing and command dispatch;
 - Codex child-process and JSONL protocol transport;
-- reset-credit normalization, ordering, and completeness;
+- usage-limit and reset-credit normalization, ordering, and completeness;
 - human terminal and JSON presentation;
 - version/build metadata.
 
@@ -83,6 +83,7 @@ Fake-process tests should cover both successful and hostile input, including:
 - malformed, unknown, and truncated messages;
 - timeouts, signals, crashes, and bounded stderr;
 - missing, ChatGPT, API-key-only, and Bedrock authentication modes;
+- recognized, missing, malformed, and multi-bucket usage-limit windows;
 - zero, partial, capped, count-only, and non-expiring credits;
 - sentinel secrets that must never reach stdout, stderr, JSON errors, or logs.
 

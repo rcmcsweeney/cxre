@@ -1,23 +1,24 @@
 # CXRE
 
-> **Know exactly when your Codex reset credits expire.**
+> **Know when your Codex limits reset and reset credits expire.**
 
 [![CI](https://github.com/rcmcsweeney/cxre/actions/workflows/ci.yml/badge.svg)](https://github.com/rcmcsweeney/cxre/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/rcmcsweeney/cxre)](https://github.com/rcmcsweeney/cxre/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-CXRE (Codex Reset Expirations) is a small, read-only CLI that shows the exact
-expiration time for every available Codex manual reset credit. It starts as a
-single native executable, sorts the credits that expire first, and adds a
-useful countdown without hiding the underlying timestamp.
+CXRE (Codex Resets) is a small, read-only CLI that shows the exact
+expiration time for every available Codex manual reset credit. A compact
+summary above the credit table also shows the five-hour and weekly limits,
+percentage left, exact reset time, and time remaining. CXRE is a single native
+executable and sorts the credits that expire first.
 
 CXRE is an **unofficial community tool**. It is not affiliated with, endorsed
 by, or maintained by OpenAI.
 
-![CXRE terminal output showing four reset-credit expirations](docs/cxre-terminal.png)
+![CXRE reset-credit table showing four expirations](docs/cxre-terminal.png)
 
-The screenshot shows CXRE's current terminal output. Text examples below use
-fictional data.
+The screenshot shows the reset-credit table. The complete fictional example
+below also shows the usage-limit summary.
 
 ## Requirements
 
@@ -37,8 +38,11 @@ Bedrock Codex environments are not supported in v0.1.
 brew install rcmcsweeney/tap/cxre
 ```
 
-The tap is updated automatically by each stable release. Codex itself remains
-a separate prerequisite.
+The fully qualified command is intentional: on a fresh machine it adds the tap
+and installs CXRE in one step while trusting only this formula. Each stable
+release publishes or updates the formula automatically. If no stable release
+is listed yet, install from source until the first formula is published. Codex
+itself remains a separate prerequisite.
 
 ### GitHub Releases
 
@@ -81,7 +85,7 @@ public bucket is published yet. See its README if you maintain a Scoop bucket.
 ## Use
 
 ```text
-cxre             Show reset-credit expiration times.
+cxre             Show usage limits and reset-credit expiration times.
 cxre --json      Emit stable machine-readable JSON.
 cxre --utc       Display timestamps in UTC.
 cxre --version   Display build version information.
@@ -96,7 +100,13 @@ first release more complicated.
 ### Terminal output
 
 ```text
-CXRE — Codex Reset Expirations
+CXRE — Codex Resets
+
+Usage limits
+Window  Left  Resets                            Remaining
+---------------------------------------------------------
+5h       63%  Sun 12 Jul 2026 5:00:00 PM NZST   3h 45m
+Weekly   39%  Sat 18 Jul 2026 12:00:00 PM NZST  5d 22h
 
 Available reset credits: 3
 
@@ -107,8 +117,9 @@ Mon 20 Jul 2026 9:00:00 AM NZST  7d 16h
 Sun 02 Aug 2026 4:03:51 PM NZST  21d 23h
 ```
 
-Times use the operating system's local timezone unless `--utc` is set. Credits
-are sorted by the earliest expiration; credits that do not expire appear last.
+Times use the operating system's local timezone unless `--utc` is set. Limit
+percentages show the amount left, matching Codex's presentation. Credits are
+sorted by the earliest expiration; credits that do not expire appear last.
 Countdowns are floored and use compact units:
 
 - days and hours at one day or more;
@@ -135,6 +146,24 @@ when available, with the active timezone abbreviation as a portable fallback.
   "schema_version": 1,
   "generated_at": "2026-07-12T13:14:49+12:00",
   "timezone": "Pacific/Auckland",
+  "limits": {
+    "five_hour": {
+      "used_percent": 37,
+      "remaining_percent": 63,
+      "resets_at": "2026-07-12T17:00:00+12:00",
+      "resets_at_unix": 1783832400,
+      "remaining_seconds": 13511,
+      "reset_due": false
+    },
+    "weekly": {
+      "used_percent": 61,
+      "remaining_percent": 39,
+      "resets_at": "2026-07-18T12:00:00+12:00",
+      "resets_at_unix": 1784332800,
+      "remaining_seconds": 513911,
+      "reset_due": false
+    }
+  },
   "available_count": 3,
   "detailed_count": 3,
   "missing_count": 0,
@@ -151,6 +180,15 @@ when available, with the active timezone abbreviation as a portable fallback.
   "warnings": []
 }
 ```
+
+`limits.five_hour` and `limits.weekly` are `null` when Codex does not provide a
+recognized window. If a percentage is available without a reset timestamp, the
+window remains present while `resets_at`, `resets_at_unix`,
+`remaining_seconds`, and `reset_due` are `null`; human output shows `—` for the
+unknown values. A missing or partial usage window does not change the
+reset-credit `complete` field or the exit code. JSON exposes both the upstream
+`used_percent` value and the derived, clamped `remaining_percent` shown in the
+terminal.
 
 For a credit that never expires, `expires_at`, `expires_at_unix`, and
 `remaining_seconds` are `null`, while `does_not_expire` is `true`. CXRE never
@@ -234,8 +272,8 @@ to possess them:
    [Codex app-server protocol](https://developers.openai.com/codex/app-server).
 3. It asks Codex for `account/read` with `refreshToken: false`, then
    `account/rateLimits/read`.
-4. It normalizes reset-credit counts and expiration timestamps in memory,
-   terminates the child, and renders the result.
+4. It normalizes recognized quota windows, reset-credit counts, and expiration
+   timestamps in memory, terminates the child, and renders the result.
 
 CXRE does **not** read Codex's `auth.json`, query an operating-system keychain,
 store credentials, print tokens, send telemetry, consume reset credits, or
@@ -245,8 +283,9 @@ service communication, as described by the
 CXRE inherits the normal process environment, including `CODEX_HOME`, without
 searching private credential paths.
 
-CXRE uses only the account type and reset-credit rate-limit data needed for this
-command; the app-server response passes through memory while it is decoded.
+CXRE uses only the account type, recognized quota windows, and reset-credit
+rate-limit data needed for this command; the app-server response passes through
+memory while it is decoded.
 Raw app-server messages and stderr are never logged. See
 [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
@@ -269,8 +308,9 @@ CXRE_INTEGRATION=1 go test ./...
 ```
 
 The code is split into small internal packages for CLI dispatch, Codex JSONL
-transport, reset-credit domain logic, terminal/JSON rendering, and build
-metadata. See [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a change.
+transport, usage-limit and reset-credit domain logic, terminal/JSON rendering,
+and build metadata. See [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a
+change.
 
 Releases follow Semantic Versioning. A `vX.Y.Z` tag runs tests, builds static
 archives, generates checksums and SBOMs, publishes a GitHub Release, records
@@ -279,9 +319,10 @@ version paths on a matching native hosted runner.
 
 ## Scope
 
-Version 1 is deliberately about reset expirations. The internal command
-registry leaves space for possible future commands such as `cxre status`,
-`cxre limits`, and `cxre account`, but none are promised yet.
+Version 1 remains focused on reset expirations; the two standard usage windows
+provide concise context above that data. The internal command registry leaves
+space for possible future commands such as `cxre status`, `cxre limits`, and
+`cxre account`, but none are promised yet.
 
 ## License
 

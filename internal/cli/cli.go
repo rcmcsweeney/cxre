@@ -15,6 +15,7 @@ import (
 
 	"github.com/rcmcsweeney/cxre/internal/buildinfo"
 	"github.com/rcmcsweeney/cxre/internal/codex"
+	"github.com/rcmcsweeney/cxre/internal/limits"
 	"github.com/rcmcsweeney/cxre/internal/presentation"
 	"github.com/rcmcsweeney/cxre/internal/reset"
 	"golang.org/x/term"
@@ -115,11 +116,18 @@ func runExpirations(ctx context.Context, parsed options, stdout, stderr io.Write
 			ExpiresAt: credit.ExpiresAt,
 		})
 	}
-	result := reset.Build(reset.Snapshot{
+	resetResult := reset.Build(reset.Snapshot{
 		AvailableCount:  raw.AvailableCount,
 		DetailsProvided: raw.DetailsProvided,
 		Credits:         credits,
 	}, now)
+	report := presentation.Report{
+		Limits: limits.Build(limits.Snapshot{
+			FiveHour: limitSnapshot(raw.FiveHour),
+			Weekly:   limitSnapshot(raw.Weekly),
+		}, now),
+		Resets: resetResult,
+	}
 
 	location := deps.local
 	if location == nil {
@@ -135,17 +143,27 @@ func runExpirations(ctx context.Context, parsed options, stdout, stderr io.Write
 		Now:      now,
 	}
 	if parsed.json {
-		if err := presentation.RenderJSON(stdout, result, presentationOptions); err != nil {
+		if err := presentation.RenderJSON(stdout, report, presentationOptions); err != nil {
 			return renderFailure(stderr, true)
 		}
 		return 0
 	}
 
 	decorateTerminal(stdout, &presentationOptions, deps)
-	if err := presentation.RenderHuman(stdout, stderr, result, presentationOptions); err != nil {
+	if err := presentation.RenderHuman(stdout, stderr, report, presentationOptions); err != nil {
 		return renderFailure(stderr, false)
 	}
 	return 0
+}
+
+func limitSnapshot(window *codex.UsageWindow) *limits.WindowSnapshot {
+	if window == nil {
+		return nil
+	}
+	return &limits.WindowSnapshot{
+		UsedPercent: window.UsedPercent,
+		ResetsAt:    window.ResetsAt,
+	}
 }
 
 func renderUsageError(stderr io.Writer, asJSON bool, err error) int {

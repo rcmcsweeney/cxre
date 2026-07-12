@@ -7,7 +7,8 @@ not check in a placeholder formula with invalid checksums.
 
 ## One-time maintainer setup
 
-1. Create the public repository `rcmcsweeney/homebrew-tap` with a `main` branch.
+1. Confirm the public repository `rcmcsweeney/homebrew-tap` exists with a
+   `main` branch.
 2. Create a fine-grained GitHub personal access token restricted to that
    repository with **Contents: read and write** permission.
 3. Add it to `rcmcsweeney/cxre` as the Actions repository secret
