@@ -355,6 +355,7 @@ jobs:
     env:
       HOMEBREW_NO_AUTO_UPDATE: 1
       HOMEBREW_NO_INSTALL_CLEANUP: 1
+      HOMEBREW_NO_INSTALL_FROM_API: 1
     steps:
       - name: Add Linuxbrew to PATH
         if: runner.os == 'Linux'
@@ -369,9 +370,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          brew audit --strict --formula dist/homebrew/Formula/cxre.rb
-          brew install --formula dist/homebrew/Formula/cxre.rb
-          brew test cxre
+          tap_name="cxre/release-test"
+          brew tap-new --no-git "$tap_name"
+          tap_dir="$(brew --repository "$tap_name")"
+          install -m 0644 dist/homebrew/Formula/cxre.rb "$tap_dir/Formula/cxre.rb"
+          formula="$tap_name/cxre"
+          brew audit --strict --formula "$formula"
+          brew install --formula "$formula"
+          brew test "$formula"
           cxre --version | grep -F "${GITHUB_REF_NAME#v}"
 
   publish-tap:
